@@ -21,12 +21,17 @@ from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 
 from driving import basic
-from driving.basic import ROI_CENTER_320
 from driving.detection.basic_sat import Basic_Sat
 from driving.driving import DrivingNode
 from driving.registry import CONTROLLERS, DETECTORS, create_algorithms
 from driving.steering.basic_p import Basic_P
-from driving.steering.basic_p_parameters import PARAMETER_NAMES
+
+
+# 외부에서 사용하는 ROS 파라미터 이름을 확인한다.
+PARAMETER_NAMES = {
+    'left': 'basic_p.left.normal_angular_divisor',
+    'right': 'basic_p.right.normal_angular_divisor',
+}
 
 
 def image_message(image):
@@ -48,7 +53,6 @@ def straight_lane():
 
 class RawDetector:
     input_topic = 'camera_raw'
-    output_type = ROI_CENTER_320
 
     def __init__(self):
         self.seen = []
@@ -65,7 +69,6 @@ class DebugRawDetector(RawDetector):
 
 
 class AlternateController:
-    input_type = ROI_CENTER_320
 
     def compute(self, center):
         twist = Twist()
@@ -80,7 +83,6 @@ class PathResult:
 
 class PathDetector:
     input_topic = 'camera_raw_16_9'
-    output_type = 'test_path_in_meters_v1'
 
     def detect(self, msg: CompressedImage) -> PathResult:
         # 이 조합은 미검출을 None이 아닌 빈 경로로 표현한다.
@@ -89,7 +91,6 @@ class PathDetector:
 
 
 class PathController:
-    input_type = 'test_path_in_meters_v1'
 
     def compute(self, result: PathResult) -> Twist:
         self.last_result = result
@@ -306,12 +307,12 @@ class NodeTests(unittest.TestCase):
         self.assertEqual(self.node.steering_algorithm, 'basic_p')
         self.assertEqual(self.commands, [])
 
-    def test_incompatible_pair_and_constructor_failure_keep_current_pair(self):
-        class Incompatible(RawDetector):
-            output_type = 'path_in_meters'
+    def test_unsupported_input_and_constructor_failure_keep_current_pair(self):
+        class UnsupportedInput(RawDetector):
+            input_topic = 'unknown_camera'
 
         original = (self.node.detector, self.node.controller)
-        with patch.dict(DETECTORS, basic_sobel=Incompatible):
+        with patch.dict(DETECTORS, basic_sobel=UnsupportedInput):
             self.node.lane_detection_selection_callback(String(data='basic_sobel'))
 
         def broken_factory():
@@ -388,6 +389,25 @@ class NodeTests(unittest.TestCase):
         self.assertEqual(self.node.controller.last_result, PathResult(()))
         self.assertEqual(self.commands[-1], Twist())
         self.assertEqual(self.debug_images, [])  # 디버깅 메서드는 팀 코드의 필수 조건이 아니다.
+
+    def test_selection_uses_names_without_result_type_metadata(self):
+        with patch.dict(DETECTORS, yolo=PathDetector), \
+                patch.dict(CONTROLLERS, pure_pursuit=PathController):
+            self.node.lane_detection_selection_callback(String(data='yolo'))
+            self.assertEqual(self.node.lane_detection_algorithm, 'yolo')
+            # 중간 조합의 데이터 오류는 처리 시 0 Twist로 이어진다.
+            # 좌표 의미만 다른 잘못된 조합까지 자동 판별해 주는 것은 아니다.
+            self.node.camera_raw_16_9_callback(CompressedImage(data=b'\x0c'))
+            self.finish_frame()
+            self.assertEqual(self.commands[-1], Twist())
+            self.node.steering_selection_callback(String(data='pure_pursuit'))
+            self.assertEqual(self.node.steering_algorithm, 'pure_pursuit')
+        self.assertFalse(hasattr(self.node.detector, 'output_type'))
+        self.assertFalse(hasattr(self.node.controller, 'input_type'))
+        self.node.camera_raw_16_9_callback(CompressedImage(data=b'\x0c'))
+        self.finish_frame()
+        self.assertAlmostEqual(self.commands[-1].linear.x, 0.1)
+        self.assertAlmostEqual(self.commands[-1].angular.z, 0.06)
 
     def test_switch_discards_inflight_result_and_queued_old_frame(self):
         started, release = Event(), Event()
@@ -492,8 +512,8 @@ class NodeTests(unittest.TestCase):
         self.node._poll_pipeline()
         self.assertEqual(self.commands[-1], Twist())
         self.assertIsNot(self.node.controller, old_controller)
-        self.assertEqual(old_controller.angular_divisors.left, 1.7)
-        self.assertEqual(self.node.controller.angular_divisors.right, 1.3)
+        self.assertEqual(old_controller.left_divisor, 1.7)
+        self.assertEqual(self.node.controller.right_divisor, 1.3)
         self.node.camera_callback(frame)
         self.finish_frame()
         self.assertAlmostEqual(self.commands[-1].angular.z, previous.angular.z / 2.0)
@@ -528,7 +548,7 @@ class NodeTests(unittest.TestCase):
         def reject_after_validation(parameters):
             return SetParametersResult(successful=False, reason='Test rejection')
 
-        validator = self.node._basic_p_parameters.validate
+        validator = self.node._validate_parameters
         self.node.remove_on_set_parameters_callback(validator)
         self.node.add_on_set_parameters_callback(reject_after_validation)
         self.node.add_on_set_parameters_callback(validator)

@@ -6,7 +6,6 @@ from typing import Optional
 
 # 선택한 좌/우 ROI 내부 x좌표(폭 320px). None은 basic 검출기의 미검출 표현.
 LaneCenter = Optional[float]
-ROI_CENTER_320 = 'roi_center_x_320_v1'
 
 
 @dataclass(frozen=True)

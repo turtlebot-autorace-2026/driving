@@ -19,17 +19,7 @@ class Config:
     debug_color: tuple  # (0, 0, 255): red
 
 
-@dataclass(frozen=True)
-class AngularDivisors:
-    """한 프레임 계산 중에는 바뀌지 않는 좌우 조향 분모."""
-
-    left: float
-    right: float
-
-
 class Basic_P:
-    input_type = basic.ROI_CENTER_320
-
     LEFT_LANE_CONFIG = Config(
             roi_start_x=0,
             roi_end_x=320,
@@ -52,18 +42,15 @@ class Basic_P:
         )
 
     def __init__(
-        self, lane_mode: bool = True, angular_divisors: Optional[AngularDivisors] = None,
+        self, lane_mode: bool = True,
+        left_divisor: Optional[float] = None, right_divisor: Optional[float] = None,
     ):
         self.lane_mode = lane_mode  # True: Left
-        self.angular_divisors = (
-            self.default_angular_divisors() if angular_divisors is None else angular_divisors
+        self.left_divisor = (
+            self.LEFT_LANE_CONFIG.normal_angular_divisor if left_divisor is None else left_divisor
         )
-
-    @classmethod
-    def default_angular_divisors(cls) -> AngularDivisors:
-        return AngularDivisors(
-            left=cls.LEFT_LANE_CONFIG.normal_angular_divisor,
-            right=cls.RIGHT_LANE_CONFIG.normal_angular_divisor,
+        self.right_divisor = (
+            self.RIGHT_LANE_CONFIG.normal_angular_divisor if right_divisor is None else right_divisor
         )
 
     @classmethod
@@ -101,7 +88,7 @@ class Basic_P:
         base_speed = 0.22
         linear_divisor = 1.5
         angular_divisor = (
-            self.angular_divisors.left if self.lane_mode else self.angular_divisors.right
+            self.left_divisor if self.lane_mode else self.right_divisor
         )
 
 

@@ -6,12 +6,10 @@ from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Header
 
 from driving import basic
-from driving.interfaces import CameraTopic
 
 
 class Basic_Sat:
-    input_topic: CameraTopic = 'camera'
-    output_type = basic.ROI_CENTER_320
+    input_topic = 'camera'
 
     def __init__(self, lane_mode: bool = True):
         self.lane_mode = lane_mode

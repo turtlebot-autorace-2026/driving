@@ -6,8 +6,22 @@ Ubuntu 20.04 / Python 3.8**이다.
 
 작업 규칙은 [AGENTS.md](AGENTS.md), 구현된 기능의 범위와 한계는
 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)를 함께 확인한다.
+노드의 동작 순서와 `FrameJob`/`FrameResult`가 궁금하면
+[driving 노드 동작 안내](docs/driving-flow.html)를 브라우저에서 연다.
+영상 수신부터 발행까지의 설명과 상황별 단계 보기를 포함하며 인터넷 연결 없이 읽을 수 있다.
 파일 이름은 GitHub에서 기여 안내로 인식하는 `CONTRIBUTING.md`를 사용한다.
 ([GitHub의 기여 안내 파일 설명](https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions/setting-guidelines-for-repository-contributors))
+
+처음 코드를 읽는다면 `driving.py`의 `_run_algorithms()`부터 보면 된다.
+검출 결과를 그대로 조향기에 넘기고, 필요하면 검출기의 디버깅 영상을 받는다.
+알고리즘을 추가할 때 꼭 알아야 할 부분은 다음 세 가지다.
+
+1. 검출기에 `input_topic`과 `detect(msg)`를 작성한다. 전처리도 여기에 둔다.
+2. 조향기에 `compute(result)`를 작성하고 `Twist`를 반환한다.
+3. 두 클래스를 `registry.py`에 이름으로 등록한다.
+
+디버깅은 `get_debug_image()`를 추가하면 되고, ROS 파라미터가 필요할 때만
+노드의 선언·검증·적용 부분을 수정한다. 별도 상속이나 결과 형식 식별자는 필요 없다.
 
 ## 목차
 
@@ -49,15 +63,16 @@ camera / camera_raw / camera_raw_16_9 (CompressedImage)
 
 | 경로 | 역할 / 수정하는 경우 |
 | --- | --- |
-| `driving/driving.py` | 구독·선택·worker·발행·감시. 일반적인 알고리즘 추가에는 수정 불필요 |
-| `driving/interfaces.py` | 검출·조향·선택적 디버깅 메서드 규약 |
+| `driving/driving.py` | 구독·선택·파라미터·계산 호출·발행·중단 감시 |
 | `driving/registry.py` | 선택 이름과 실제 클래스/생성 함수 연결 |
 | `driving/detection/` | 전처리를 포함한 팀 검출 코드 |
 | `driving/steering/` | 팀 조향 코드 |
 | `driving/basic.py` | basic 조합 전용 결과 형식과 좌우 설정 |
-| `driving/steering/basic_p_parameters.py` | basic_p의 ROS 파라미터 선언·검증·적용 |
 | `test/test_pipeline.py` | 기존 알고리즘 및 ROS 파이프라인 회귀 검사 |
 | `package.xml`, `setup.py` | 의존성, Python 패키지와 리소스 설치 |
+
+노드 안의 주석은 **주행 계산 → 영상 입력 → 알고리즘 선택 → 파라미터 → 실행 관리**
+순서다. 일반적인 검출·조향 추가에는 마지막 실행 관리 부분을 수정할 필요가 없다.
 
 현재 실제 구현은 `basic_sat` / `basic_p`다. `basic_sobel`, `yolo`, `pure_pursuit`는
 선택 이름의 타입에만 있으며 구현·등록 전에는 선택할 수 없다.
@@ -182,7 +197,6 @@ source하지 않는다. Humble에서 개발했다면 PR에 그 사실과 Galacti
 
 | 항목 | basic 계약 |
 | --- | --- |
-| 식별자 | `driving.basic.ROI_CENTER_320`, 값은 `roi_center_x_320_v1` |
 | 정상 결과 | 선택한 좌/우 ROI 내부 x좌표, 유한수, `0 <= x < 320` |
 | 좌표 의미 | basic과 같은 투영·ROI 의미. 전체 영상 x좌표가 아님 |
 | 미검출 | `None` |
@@ -198,20 +212,13 @@ source하지 않는다. Humble에서 개발했다면 PR에 그 사실과 Galacti
 
 ### 새 결과 형식과 조향기를 함께 넣는 경우
 
-두 차선 경계, 주행 경로, 곡률, 미터 단위 오차 등을 전달하고 싶으면 별도 결과 타입과
-식별자를 정의한다. 예를 들어 `team_lane_error_normalized_v1`은 basic의 ROI 좌표와 다르다.
+두 차선 경계, 주행 경로, 곡률 등을 전달하려면 두 코드가 쓸 자료형을 정한다.
+단순한 값이면 숫자만 반환해도 되고, 여러 값이면 dataclass 등을 사용해도 된다.
+공통 노드는 `detect()`의 반환값을 `compute()`에 그대로 전달한다.
 
-검출기의 `output_type`과 조향기의 `input_type`은 같은 식별자를 사용한다.
-노드는 이 문자열만 비교하고 결과 객체 자체를 변환하지 않는다. 아래 항목은 두 구현이
-같이 지켜야 한다.
-
-- Python 자료형과 각 필드의 의미.
-- 좌표계와 단위, 양수·음수 방향, 정상 범위.
-- 미검출 표현과 그때의 조향 행동.
-- 시간 정보가 필요하다면 결과에 담을 timestamp와 그 시계의 의미.
-
-결과 의미가 바뀌면 식별자의 버전도 바꾸는 편이 좋다.
-새 형식을 기존 식별자 이름으로 숨기면 선택 검사는 통과해도 잘못된 조향이 나올 수 있다.
+두 구현이 합의할 내용은 **자료형, 좌표계·단위·부호, 정상 범위, 미검출 표현**이다.
+예를 들어 같은 `float`여도 ROI의 x좌표와 미터 단위 오차는 다른 값이다.
+필요한 입력 검사는 각 조향기에서 한다. 런타임에 결과 형식 문자열을 비교하는 단계는 없다.
 
 ## 5. 이식 예제: 검출·조향·JPEG 디버깅
 
@@ -230,9 +237,6 @@ source하지 않는다. Humble에서 개발했다면 PR에 그 사실과 Galacti
 ```python
 # file: driving/team_contract.py
 from dataclasses import dataclass
-
-
-TEAM_LANE_ERROR = 'team_lane_error_normalized_v1'
 
 
 @dataclass(frozen=True)
@@ -282,13 +286,11 @@ import numpy as np
 from sensor_msgs.msg import CompressedImage
 
 from driving.detection.team_core import find_center_x
-from driving.interfaces import CameraTopic
-from driving.team_contract import LaneObservation, TEAM_LANE_ERROR
+from driving.team_contract import LaneObservation
 
 
 class TeamDetector:
-    input_topic: CameraTopic = 'camera'
-    output_type = TEAM_LANE_ERROR
+    input_topic = 'camera'
 
     def __init__(self):
         self._debug_frame = None
@@ -354,12 +356,10 @@ from math import isfinite
 
 from geometry_msgs.msg import Twist
 
-from driving.team_contract import LaneObservation, TEAM_LANE_ERROR
+from driving.team_contract import LaneObservation
 
 
 class TeamP:
-    input_type = TEAM_LANE_ERROR
-
     def __init__(self):
         self.speed = 0.1
         self.kp = 0.6
@@ -401,7 +401,8 @@ from driving.detection.team_detector import TeamDetector
 from driving.steering.team_p import TeamP
 ```
 
-기존 이름을 유지하면서 `Literal`에도 새 이름을 추가한다.
+기존 이름을 유지하면서 편집기 타입 힌트용 `Literal`에도 새 이름을 추가한다.
+실제 선택 가능 여부는 아래 딕셔너리에 등록되었는지로 판단한다.
 
 ```python
 Steering = Literal['basic_p', 'pure_pursuit', 'team_p']
@@ -411,11 +412,11 @@ Detection = Literal['basic_sobel', 'basic_sat', 'yolo', 'team_detector']
 기존 등록표에 새 항목을 추가한다. 아래처럼 basic 항목도 유지한다.
 
 ```python
-DETECTORS: Dict[Detection, Callable[[], LaneDetector[Any]]] = {
+DETECTORS = {
     'basic_sat': Basic_Sat.from_settings,
     'team_detector': TeamDetector,
 }
-CONTROLLERS: Dict[Steering, Callable[[], SteeringController[Any]]] = {
+CONTROLLERS = {
     'basic_p': Basic_P.from_settings,
     'team_p': TeamP,
 }
@@ -431,7 +432,7 @@ CONTROLLERS: Dict[Steering, Callable[[], SteeringController[Any]]] = {
 현재 생성 함수는 ROS 콜백에서 실행되며, 느린 초기화가 필요한 경우 공통 실행 구조에 대한
 별도 설계가 필요하다.
 
-### 같은 결과 계약이면 실행 중 개별 변경 가능
+### 토픽으로 선택하기
 
 다음은 namespace 없는 기본 노드에 선택 문자열을 보내는 형식이다.
 
@@ -441,31 +442,36 @@ ros2 topic pub --once /driving/steering std_msgs/msg/String "{data: 'basic_p'}"
 ```
 
 처음부터 basic 조합이라면 위 요청은 같은 이름이므로 변경하지 않는다.
-새 알고리즘 이름으로 바꾸려면 이름이 실제 등록되어 있어야 하고, **현재 상대 알고리즘**과
-결과 계약이 맞아야 한다. 문자열 토픽에는 응답 메시지가 없으므로 노드의 선택 성공/거부 로그를 확인한다.
+새 이름이 등록되어 있고 객체 생성 및 입력 토픽 검사를 통과하면 선택된다.
+등록되지 않은 이름이나 생성 실패는 기존 선택을 유지한다. 같은 이름 요청은 아무 작업도 하지 않는다.
+성공한 변경은 두 객체를 새로 만들고 이전 결과를 버린 뒤 0 Twist를 발행한다.
+문자열 토픽에는 응답 메시지가 없으므로 노드 로그를 확인한다.
 `--once` 옵션은 [Galactic의 ros2 topic pub 구현](https://github.com/ros2/ros2cli/blob/galactic/ros2topic/ros2topic/verb/pub.py)에 있는 단발 발행 옵션이다.
 
-### 새 계약의 검출·조향 쌍은 동시에 시작해야 한다
+### 다른 결과 형식의 쌍을 실행할 때
 
-5절 예제는 basic과 결과 계약이 다르다. basic_p가 활성화된 상태에서 `team_detector`만
-요청하면 거부되고, basic_sat 상태에서 `team_p`만 요청해도 거부된다.
-두 토픽을 연달아 보내도 이 제한을 해결하지 못한다.
+**이름 선택에 성공했다고 두 알고리즘이 올바르게 연결된 것은 아니다.**
+노드가 호환성을 검사하지 않으므로 검출 결과와 조향 입력의 의미는 기여자가 맞춰야 한다.
+예외나 NaN/Inf는 0 Twist로 처리하지만, 같은 숫자를 다른 단위로 해석하는 오류까지 알 수는 없다.
 
-현재는 테스트 브랜치에서 `registry.py`의 두 기본값을 함께 지정하고 노드를 재시작하는
-방식으로 새 쌍을 실행한다.
+두 선택 토픽은 독립적이다. basic에서 예제의 `team_detector` / `team_p`로 순서대로
+바꾸면 중간에 새 검출기와 기존 조향기가 함께 선택될 수 있다. 이처럼 결과 형식까지
+달라지는 쌍은 테스트 브랜치에서 두 기본값을 함께 지정하고 노드를 재시작하는 방식으로 확인한다.
 
 ```python
 DEFAULT_DETECTION: Detection = 'team_detector'
 DEFAULT_STEERING: Steering = 'team_p'
 ```
 
-이때 5절의 핵심 검출 함수를 먼저 구현해야 한다. 기본값은 ROS 파라미터가 아니므로
-`ros2 param set`으로 알고리즘을 고를 수는 없다. 두 이름을 원자적으로 교체하는 외부
-서비스/토픽도 현재 없다. 내부 `_replace_algorithms()`가 있다는 사실과 외부 API 제공은 다르다.
+먼저 5절의 핵심 검출 함수를 구현해야 한다. 두 기본값은 ROS 파라미터가 아니며,
+두 이름을 한 번에 바꾸는 외부 API도 현재 없다. 같은 결과 형식을 사용하는 알고리즘끼리는
+개별 선택 토픽으로 교체할 수 있다.
 
-PR에 기본 조합 변경까지 포함할지는 팀과 정한다. 알고리즘만 추가하는 PR이라면 임시로
-바꾼 기본값을 복구하고, 테스트에서 `create_algorithms('team_detector', 'team_p')`로
-생성해 검증한 방법을 적을 수 있다. 추가만 했는데 모든 팀원의 기본 주행이 바뀌지 않게 한다.
+알고리즘만 추가하는 PR이라면 테스트용 기본값 변경을 복구한다. 기본 조합까지 바꾸는
+경우에는 PR에 이유와 검증한 조합을 명시한다.
+기존 전체 회귀검사도 basic 기본값을 전제로 하므로, 8.3절의 검사를 실행하기 전에
+`DEFAULT_DETECTION='basic_sat'`, `DEFAULT_STEERING='basic_p'`로 복구한다.
+새 클래스와 등록 항목은 그대로 두며, 새 쌍의 노드 실행을 확인할 때만 두 기본값을 함께 바꾼다.
 
 ## 7. 파라미터·의존성·리소스
 
@@ -490,11 +496,24 @@ ROS 파라미터 YAML로 지정할 수 있다. 실행 중 변경값은 재시작
 구현의 설정을 자동으로 바꾸지 않는다. 예제 `TeamP.kp` 역시 단순 Python 속성이다.
 새 파라미터가 필요하면 선언·검증·실제 객체 반영까지 추가해야 한다.
 
-참고할 구현은 `basic_p_parameters.py`다. Galactic의 검증 콜백은 성공 여부를 반환할 뿐,
-최종 확정 전에 실행 객체를 변경하지 않는다. 이후 콜백에서 실제 저장된 값을 읽어
-새 스냅샷을 적용하고 이전 설정의 프레임 결과를 폐기하는 방식이다.
-새 구현에서는 시작 override, 잘못된 값, 다른 알고리즘을 쓰는 동안의 변경,
-재선택 시 값 유지까지 정의한다. 현재 기능 추가 범위와 무관한 계수까지 한 번에 노출하지 않는다.
+파라미터 관리는 `driving.py`에서 바로 확인할 수 있다.
+
+1. `BASIC_P_PARAMETERS`와 `__init__()`에서 이름·기본값을 정하고 선언한다.
+2. `_validate_parameters()`는 값이 올바른지만 검사한다.
+3. `_configure_basic_p()`는 확정된 값을 읽어 조향기의 `left_divisor`, `right_divisor`에 전달한다.
+4. `_refresh_controller_parameters()`는 값이 달라졌을 때 조향기를 교체하고 이전 결과를 버린다.
+
+Galactic의 검증 콜백에서 아직 확정되지 않은 값을 실행 객체에 먼저 적용하지 않는다.
+현재 노드는 다음 영상/감시 콜백에서 반영한다. 실행 중인 worker가 쓰는 객체를 직접 바꾸면
+한 프레임 안에서 이전 값과 새 값이 섞일 수 있어 새 객체를 만든다.
+
+새 알고리즘의 파라미터가 필요하면 이 위치에서 필요한 이름과 적용 코드를 추가한다.
+두 값만을 위해 별도 파라미터 관리자나 범용 등록 체계를 만들 필요는 없다.
+시작 override, 잘못된 값, 다른 알고리즘을 쓰는 동안의 변경, 재선택 시 유지 여부를 확인한다.
+
+이 절은 현재 파라미터의 사용법과 확장 시 수정할 위치를 안내한다.
+새 `team_p.kp` 등을 ROS 파라미터로 연결하는 완성 예제는 아직 제공하지 않으므로,
+그 작업에는 `driving.py`의 초기 생성·선택 변경·실행 중 설정 반영 흐름을 함께 확인해야 한다.
 
 ### 의존성과 파일 경로
 
@@ -521,7 +540,7 @@ ROS 파라미터 YAML로 지정할 수 있다. 실행 중 변경값은 재시작
 | 정상 미검출 | 자신의 미검출 표현과 조향 정책이 일치하는지 |
 | 잘못된 입력 | 빈 payload, 손상 JPEG, 지원하지 않는 크기를 처리하는지 |
 | 결과 범위 | NaN/Inf·잘못된 좌표를 거부하고 유한 Twist를 반환하는지 |
-| 등록 | 실제 이름으로 생성되며 호환 조합은 수락, 비호환은 거부되는지 |
+| 등록·연결 | 이름으로 생성되며 실제 검출 결과를 의도한 조향기가 올바르게 해석하는지 |
 | 전환/지연 | 상태 초기화, 이전 작업 폐기, 최신 프레임 처리, timeout 동작 |
 | 디버깅 | JPEG 디코딩, 크기·표시 위치·입력 header, 미검출 화면, 오류 격리 |
 | 파라미터 추가 시 | 시작 값, 실행 중 변경, 거부된 값이 동작을 바꾸지 않는지 |
@@ -581,6 +600,10 @@ def test_adapter_and_steering(center, expected_error):
 
 먼저 소스 테스트를 실행한다. ROS 메시지를 import하므로 ROS setup을 source한 상태여야 한다.
 domain 94와 localhost로 테스트 통신을 분리한다.
+6절에서 새 조합으로 기본값을 바꿨다면 먼저 basic 기본값으로 복구한다.
+예를 들어 기존 테스트는 기본 선속도 0.22를 기대하므로, 예제 TeamP의 0.1이 나오면 실패한다.
+이 경우에는 새 알고리즘의 오류와 테스트의 기본값 전제를 구분한다.
+기본 조합 자체를 변경하는 PR이라면 테스트도 의도한 새 기본값에 맞춰 검토해야 한다.
 
 ```bash
 source /opt/ros/galactic/setup.bash
@@ -745,7 +768,6 @@ PR 작성과 브랜치 선택 방식은 [GitHub 공식 안내](https://docs.gith
 
 ## 결과 계약과 연결
 - 입력 토픽·메시지·해상도·보정/색상 조건:
-- output_type / input_type:
 - 결과 자료형·좌표계·단위·부호:
 - 미검출 표현과 그때의 조향 정책:
 - 함께 사용할 알고리즘 / 기본값 변경 여부:
@@ -824,8 +846,8 @@ GitHub에서 fork한 뒤 **fork를 `origin`, 팀 저장소를 `upstream`**으로
 
 | 증상 | 먼저 확인할 내용 |
 | --- | --- |
-| 이름을 보냈는데 선택이 안 됨 | Literal·등록표 누락, 미구현 이름, 현재 상대와 결과 계약 불일치, 로그 |
-| 새 검출·조향을 순서대로 보내도 둘 다 거부됨 | 새 결과 계약이면 두 기본값을 함께 맞춰 시작해야 함. 외부 동시 선택 API 없음 |
+| 이름을 보냈는데 선택이 안 됨 | 등록표 누락, 미구현 이름, 생성 실패, 지원하지 않는 input_topic, 로그 |
+| 선택은 됐는데 조향이 틀리거나 예외가 남 | 검출·조향의 실제 자료형·좌표·단위 불일치. 두 토픽으로 변경 중인 중간 조합인지 확인 |
 | 영상 콜백은 오는데 처리가 안 됨 | 활성 검출기의 input_topic, namespace/remap, 실제 CompressedImage 타입 |
 | debug 토픽은 있는데 화면이 안 나옴 | 활성 검출기에 get_debug_image가 있는지, 유효 결과가 나오는지, 구독 QoS Best Effort |
 | 미검출인데 로봇이 계속 회전함 | basic의 None 극단값 정책인지, 자신의 조향 정책이 무엇인지 |

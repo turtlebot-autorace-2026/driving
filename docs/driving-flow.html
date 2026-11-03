@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="driving 노드의 영상 처리, FrameJob·FrameResult, 알고리즘 선택, 파라미터와 발행 흐름 안내">
+<title>driving 노드 동작 안내</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f7fa;--surface:#fff;--text:#172634;--muted:#526476;--line:#d8e1e8;--accent:#126c63;--soft:#e7f4f0;--code:#edf1f5;--warn:#805207;--warn-bg:#fff4d9}
+@media(prefers-color-scheme:dark){:root{--bg:#111a21;--surface:#19262f;--text:#e6edf3;--muted:#b1c1cd;--line:#3a4c59;--accent:#80d5bd;--soft:#213c37;--code:#25333e;--warn:#f5cf83;--warn-bg:#3d3321}}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:1rem}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.8 system-ui,-apple-system,"Noto Sans KR",sans-serif;word-break:keep-all;overflow-wrap:anywhere}main{max-width:1060px;margin:auto;padding:48px 24px 64px}h1,h2,h3,p,figure{margin:0}h1{font-size:clamp(1.9rem,4vw,3rem);line-height:1.3;letter-spacing:-.045em;margin:12px 0 18px}h2{font-size:1.55rem;line-height:1.4;margin-bottom:18px;letter-spacing:-.025em}h3{font-size:1.12rem;margin-bottom:10px}p+p{margin-top:12px}a{color:var(--accent);text-underline-offset:4px}a:hover{text-decoration-thickness:2px}code{font: .91em/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--code);border-radius:4px;padding:2px 5px;overflow-wrap:anywhere}pre{background:var(--code);padding:20px;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.75;margin:16px 0}pre code{padding:0;background:transparent}section{margin-top:44px}header{padding-bottom:24px;border-bottom:1px solid var(--line)}.eyebrow{font-size:.85rem;font-weight:650;color:var(--accent);letter-spacing:.07em}.lead{font-size:1.15rem;max-width:760px}.muted,figcaption{color:var(--muted);font-size:.92rem}.note{padding:14px 18px;background:var(--soft);border-radius:8px;margin-top:18px}.caution{background:var(--warn-bg);color:var(--warn)}nav{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:22px}nav a{font-size:.95rem}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:22px;min-width:0}.label{font-size:.84rem;font-weight:650;color:var(--accent);margin-bottom:8px}.flow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.flow .card{border-top:4px solid var(--accent)}.flow p{margin-top:10px;font-size:.94rem}figcaption{margin-top:12px}table{border-collapse:collapse;width:100%;background:var(--surface);font-size:.95rem;margin:16px 0}th,td{padding:13px 15px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere}th{font-weight:650;background:var(--code)}.table-wrap{overflow-x:auto}ol,ul{padding-left:24px;margin:12px 0}li+li{margin-top:8px}.steps{counter-reset:steps;list-style:none;padding:0}.steps li{position:relative;padding:0 0 20px 42px;margin:0}.steps li::before{counter-increment:steps;content:counter(steps);position:absolute;left:0;top:0;background:var(--accent);color:var(--surface);border-radius:50%;width:28px;height:28px;text-align:center;font-size:.9rem;font-weight:700;line-height:28px}.steps strong{display:block}.steps p{margin-top:5px}.controls{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:18px 0}.controls label{font-weight:600}select,button{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--line);border-radius:7px;min-height:44px;padding:7px 13px}select{max-width:100%}button{cursor:pointer}button:hover:not(:disabled){background:var(--soft)}button:disabled{opacity:.45;cursor:default}:focus-visible{outline:3px solid var(--accent);outline-offset:3px}.step-title{font-size:1.12rem;margin:10px 0}.scenario{padding:22px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.scenario-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:20px}.state{padding-top:12px;border-top:2px solid var(--line);min-width:0}.state pre{font-size:.86rem;margin:8px 0 0;padding:12px;min-height:120px}.progress-text{color:var(--muted);font-size:.9rem;font-variant-numeric:tabular-nums}.output{margin-top:18px;padding:12px 16px;background:var(--soft);border-radius:7px}.dynamic-note{min-height:4em}.legend{font-size:.9rem;color:var(--muted);margin-top:12px}details{margin-top:12px;border-bottom:1px solid var(--line);padding-bottom:14px}summary{cursor:pointer;font-weight:650;min-height:44px;align-content:center}details p,details ul{margin-top:8px}footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--line);font-size:.9rem;color:var(--muted)}.no-js-only{display:block}.js-ready .no-js-only{display:none}.with-js{display:none}.js-ready .with-js{display:block}
+@media(max-width:700px){main{padding:28px 16px 44px}.grid,.flow,.scenario-grid{grid-template-columns:1fr}.card,.scenario{padding:18px}h2{font-size:1.35rem}.state pre{min-height:0}th,td{padding:10px 8px}nav{gap:8px 16px}.dynamic-note{min-height:0}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media print{:root{color-scheme:light;--bg:#fff;--surface:#fff;--text:#111;--muted:#444;--line:#bbb;--accent:#17594f;--soft:#eef5f1;--code:#f0f0f0;--warn:#5a430b;--warn-bg:#fff}body{font-size:11pt}main{max-width:none;padding:0}nav,.controls,.with-js{display:none!important}.no-js-only{display:block!important}section{margin-top:24px}.card,pre,tr{break-inside:avoid}a{color:inherit}h2,h3{break-after:avoid}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<p class="eyebrow">DRIVING · CODE WALKTHROUGH</p>
+<h1>영상 한 장이<br>주행 명령이 되기까지</h1>
+<p class="lead">공통 노드는 영상을 받고, 선택된 검출기와 조향기를 호출한다. 계산이 끝나면 그 결과가 아직 유효한지 확인한 뒤 속도와 디버깅 영상을 발행한다.</p>
+<p class="muted" style="margin-top:14px">2026-11-03 코드 기준 · ROS 2 Galactic / Python 3.8 대상 · 브라우저에서 여는 독립 문서</p>
+<nav aria-label="문서 목차">
+<a href="#overview">전체 흐름</a><a href="#frame-types">FrameJob과 FrameResult</a><a href="#one-frame">한 프레임 따라가기</a><a href="#scenarios">상황별 단계 보기</a><a href="#changes">선택과 파라미터</a><a href="#topics">토픽과 basic</a><a href="#reading">코드 읽는 순서</a>
+</nav>
+</header>
+
+<section id="overview">
+<h2>1. ROS 콜백과 영상 계산의 역할</h2>
+<figure>
+<div class="flow">
+<div class="card"><div class="label">① ROS 콜백 · 입력</div><h3>영상 수신 → 작업 제출</h3><code>process_frame()</code><p>현재 검출기의 입력을 고른다. 최신 대기 영상 한 장을 저장하고, 빈 worker에 작업을 맡긴다.</p><p><strong>노드에 남는 정보:</strong><br><code>FrameJob</code></p></div>
+<div class="card"><div class="label">② worker · 계산</div><h3>검출 → 조향 → 디버깅</h3><code>_run_algorithms()</code><p><code>detect(msg)</code>의 결과를 <code>compute(result)</code>에 전달한다. 선택적으로 JPEG를 생성한다.</p><p><strong>완료 시 반환하는 값:</strong><br><code>FrameResult</code></p></div>
+<div class="card"><div class="label">③ ROS 콜백 · 발행</div><h3>완료·설정·시간 확인</h3><code>_poll_pipeline()</code><p>이전 설정의 결과나 오래된 결과를 버린다. 유효한 결과의 <code>Twist</code>와 JPEG를 각 토픽에 발행한다.</p><p><strong>확인 주기:</strong> 0.05초</p></div>
+</div>
+<figcaption>worker는 하나다. 영상 계산을 맡겨 둔 동안 ROS 콜백이 선택 변경·파라미터 요청·중단 감시를 처리할 수 있다. 생성 함수나 다른 콜백이 오래 걸리면 이 감시도 지연될 수 있다.</figcaption>
+</figure>
+<div class="note">노드는 차선 좌표나 미검출의 뜻을 해석하지 않는다. 그 의미는 선택한 검출기와 조향기가 합의한다. 노드가 확인하는 최종 출력은 <strong>유한한 수로 구성된 Twist</strong>다.</div>
+</section>
+
+<section id="frame-types">
+<h2>2. FrameJob은 작업 추적, FrameResult는 계산 결과</h2>
+<p>둘 다 <code>@dataclass</code>로 만든 작은 Python 자료 묶음이다. 필요한 필드를 받는 생성자가 자동으로 만들어진다. ROS 토픽에 이 객체 자체를 발행하지는 않는다.</p>
+<div class="grid" style="margin-top:18px">
+<article class="card"><div class="label">노드가 보관</div><h3>FrameJob</h3><p>“어느 설정으로, 언제 받은 영상을 처리하고 있으며, 끝났는가?”를 확인하는 정보다.</p><pre><code>FrameJob(
+    generation=3,
+    received_at=100.0,
+    future=처리_작업의_Future,
+)</code></pre><p class="muted">작업 자체를 실행하는 클래스는 아니다. 실행은 <code>ThreadPoolExecutor</code>에 맡긴다.</p></article>
+<article class="card"><div class="label">worker가 반환</div><h3>FrameResult</h3><p>“이 영상으로 계산한 속도는 무엇이며, 함께 보낼 디버깅 영상이 있는가?”를 담는다.</p><pre><code>FrameResult(
+    twist=계산한_Twist,
+    debug_image=JPEG_메시지_또는_None,
+    debug_error=경고_문구_또는_None,
+)</code></pre><p class="muted">중간 검출값인 center나 경로는 여기에 보관하지 않는다. 그 값은 <code>detect → compute</code> 사이에서 전달된다.</p></article>
+</div>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">필드</th><th scope="col">실제 의미</th><th scope="col">확인하는 이유</th></tr></thead>
+<tbody>
+<tr><td><code>FrameJob.generation</code></td><td>작업을 시작할 때의 선택·설정 번호</td><td>현재 번호와 다르면 예전 알고리즘/파라미터의 결과다. 영상마다 증가하는 번호는 아니다.</td></tr>
+<tr><td><code>FrameJob.received_at</code></td><td>활성 영상 콜백에서 기록한 <code>monotonic()</code> 시각</td><td>현재 시각과 비교해 0.5초보다 오래된 결과인지 확인한다. 촬영 시각 <code>header.stamp</code>와 다르다.</td></tr>
+<tr><td><code>FrameJob.future</code></td><td>worker에 맡긴 작업의 완료 상태와 반환값/예외에 접근하는 객체</td><td><code>done()</code>으로 완료를 확인하고, <code>result()</code>로 결과를 꺼낸다.</td></tr>
+<tr><td><code>FrameResult.twist</code></td><td>조향기가 만든 <code>geometry_msgs/Twist</code></td><td>검사를 통과하면 <code>cmd_vel</code>로 발행한다.</td></tr>
+<tr><td><code>FrameResult.debug_image</code></td><td>선택적인 <code>CompressedImage</code></td><td><code>None</code>이면 해당 프레임의 디버깅 발행을 생략한다.</td></tr>
+<tr><td><code>FrameResult.debug_error</code></td><td>디버깅 생성 과정에서 발생한 오류의 문자열</td><td>경고를 기록하면서 정상 조향값을 유지한다.</td></tr>
+</tbody></table></div>
+<h3>두 객체를 이어 주는 Future</h3>
+<pre><code># worker에 맡기면, 계산 완료를 기다리지 않고 Future를 받는다.
+future = worker.submit(_run_algorithms, detector, controller, msg)
+job = FrameJob(generation, received_at, future)
+
+# 이후 감시 콜백에서 완료 및 유효성을 확인한다.
+if job.future.done():
+    # 실제 코드는 generation과 입력 나이도 먼저 검사한다.
+    frame = job.future.result()  # 정상 완료라면 FrameResult
+    cmd_vel_pub.publish(frame.twist)</code></pre>
+<p class="muted">위 코드는 관계를 설명하는 축약 예시다. 실제 코드에는 예외 처리와 디버깅 발행도 있다. <code>Future.result()</code>는 미완료 상태에서 호출하면 기다리지만, 현재 노드는 <code>done()</code>을 먼저 확인한다. 계산 중 예외가 발생했다면 <code>result()</code>에서 그 예외가 다시 발생한다.</p>
+</section>
+
+<section id="one-frame">
+<h2>3. 한 프레임을 순서대로 따라가기</h2>
+<ol class="steps">
+<li><strong>노드를 시작한다 — <code>main → __init__</code></strong><p>ROS 초기화 후 두 분모 파라미터를 선언·검사한다. 등록표에서 기본 <code>basic_sat / basic_p</code> 객체를 만들고, publisher·subscription·worker·감시 타이머를 준비한다. <code>rclpy.spin()</code>이 ROS 콜백을 실행한다.</p></li>
+<li><strong>입력 영상을 고른다 — <code>camera_callback → process_frame</code></strong><p>세 카메라 토픽의 마지막 메시지를 각각 보관한다. 계산은 활성 검출기의 <code>input_topic</code>에 해당하는 입력만 진행한다. 확정된 파라미터 변경을 먼저 반영하고 <code>(수신 시각, msg)</code>를 대기 슬롯에 넣는다.</p></li>
+<li><strong>한 작업을 제출한다 — <code>_start_next_frame</code></strong><p>기존 <code>_job</code>이 없고 대기 영상이 있을 때만 시작한다. 대기 중 이미 0.5초보다 오래된 영상은 버린다. <code>submit()</code>으로 받은 Future와 설정 번호·수신 시각을 <code>FrameJob</code>으로 묶어 보관한다.</p></li>
+<li><strong>알고리즘을 실행한다 — <code>_run_algorithms</code></strong><p>검출기가 압축 해제·전처리·차선 검출을 한다. 조향기가 결과를 받아 Twist를 만든다. Twist 타입과 여섯 성분의 유한성을 검사하고, <code>get_debug_image()</code>가 있으면 호출한다. 결과를 <code>FrameResult</code>로 반환한다.</p></li>
+<li><strong>회수하고 발행한다 — <code>_poll_pipeline</code></strong><p>0.05초 주기로 완료 여부를 확인한다. 완료된 작업을 로컬 변수로 옮기고 <code>_job=None</code>으로 만든다. 설정 번호가 같고 입력 나이가 0.5초 이내인 결과만 꺼내 발행한다. 마지막에 최신 대기 영상의 처리를 시작한다.</p></li>
+<li><strong>유효한 입력이 끊기면 정지한다</strong><p><code>_last_valid_frame_at</code>은 마지막 유효 결과를 만든 영상의 <em>수신 시각</em>이다. 아직 유효 결과가 없거나 그 시각부터 0.5초를 초과하면 0 Twist를 발행한다. worker가 계산 중이어도 감시 콜백이 실행되면 이 확인은 계속한다.</p></li>
+</ol>
+<p class="note">0.5초에는 <strong>대기 시간 + 검출·조향 + JPEG 생성 + 완료 후 감시 콜백까지의 대기</strong>가 포함된다. 0.05초 타이머는 결과를 확인하는 주기이며, 카메라 FPS나 항상 일정한 제어 주기를 보장하지 않는다.</p>
+</section>
+
+<section id="scenarios">
+<h2>4. 상태가 바뀌는 모습을 단계별로 보기</h2>
+<p>버튼으로 시점을 이동하며 <code>_job</code>, <code>_pending_frame</code>, 계산 결과를 비교해 보자. 시각은 설명용 상대 시간이며 실제 ROS 실행이나 실시간 측정은 아니다.</p>
+<div class="with-js">
+<div class="controls">
+<label for="scenario">상황</label>
+<select id="scenario"><option value="normal">정상 처리</option><option value="queue">새 영상이 계속 들어올 때</option><option value="switching">처리 중 알고리즘을 바꿀 때</option><option value="timeout">처리가 오래 걸릴 때</option><option value="debug">디버깅 영상만 실패할 때</option></select>
+<button type="button" id="previous" disabled>이전 단계</button><button type="button" id="next">다음 단계</button>
+</div>
+<div class="scenario" aria-live="polite" aria-atomic="true">
+<p class="progress-text" id="step-count"></p><h3 class="step-title" id="step-title"></h3><p class="dynamic-note" id="step-note"></p>
+<div class="scenario-grid">
+<div class="state"><div class="label">노드 · FrameJob</div><pre id="job-state"></pre></div>
+<div class="state"><div class="label">노드 · 다음 영상 한 장</div><pre id="pending-state"></pre></div>
+<div class="state"><div class="label">worker · FrameResult</div><pre id="result-state"></pre></div>
+</div>
+<p class="output" id="output-state"></p>
+</div>
+<p class="legend">A·B·C는 서로 다른 입력 영상이다. Future에 결과가 준비되어 있어도 노드의 유효성 검사를 통과해야 발행된다.</p>
+</div>
+<div class="no-js-only"><div class="note">정상 처리: 영상 A 수신 → FrameJob 생성 → worker가 FrameResult 반환 → 감시 콜백이 회수·검사 → Twist/JPEG 발행.</div><p>처리 중 B 다음에 C가 들어오면 대기 영상은 C로 교체된다. 설정이 바뀌면 이전 FrameJob은 끝날 때까지 남지만 그 결과는 버린다. 0.5초를 초과한 결과도 버리며, 디버깅만 실패하면 유효한 Twist는 발행한다.</p></div>
+</section>
+
+<section id="changes">
+<h2>5. 알고리즘 선택과 파라미터 변경</h2>
+<div class="grid">
+<article class="card"><div class="label">String 선택 토픽</div><h3>다른 알고리즘으로 바꿀 때</h3><ol><li>문자열의 앞뒤 공백을 제거한다.</li><li>같은 조합이면 그대로 둔다.</li><li>등록된 이름으로 두 객체를 새로 생성하고 설정을 적용한다.</li><li>성공하면 이름과 객체를 교체한다.</li><li><code>_reset_processing()</code> 후 세 카메라 캐시를 비운다.</li></ol><p>등록되지 않은 이름·생성 실패·지원하지 않는 입력 토픽은 기존 선택을 유지한다. 한쪽만 바꾸어도 두 객체를 다시 만든다.</p></article>
+<article class="card"><div class="label">ROS 파라미터 서비스</div><h3>분모 값을 조절할 때</h3><ol><li><code>_validate_parameters()</code>에서 양수인 유한 실수인지 검사한다.</li><li>ROS가 변경을 확정해 저장한다.</li><li>다음 영상/감시 콜백이 저장된 값을 읽는다.</li><li>현재 Basic_P의 값과 다르면 새 조향 객체를 만든다.</li><li><code>_reset_processing()</code>으로 이전 결과를 무효로 만든다.</li></ol><p>worker가 사용하는 기존 객체는 직접 수정하지 않는다. 검출기는 유지한다. 같은 값이거나 다른 조향기를 사용 중이면 현재 객체를 교체하지 않는다.</p></article>
+</div>
+<h3 style="margin-top:22px">공통 초기화가 하는 일</h3>
+<pre><code>_generation += 1          # 이전 작업과 새 작업의 설정 번호를 구분
+_pending_frame = None     # 아직 시작하지 않은 영상 비우기
+_last_valid_frame_at = None
+cmd_vel_pub.publish(Twist())  # 먼저 정지 명령 발행</code></pre>
+<p><code>_reset_processing()</code>은 <code>_job</code>을 지우거나 worker를 강제로 취소하지 않는다. 예전 작업이 완료되면 <code>job.generation != self._generation</code>으로 판별해 버린다. 그 작업이 끝나 회수되기 전에는 새 작업도 시작되지 않는다.</p>
+<div class="note caution">두 선택 토픽은 독립적이고 검출·조향의 자료 의미를 자동 검사하지 않는다. 결과 형식까지 다른 쌍은 두 기본값을 함께 맞춰 재시작해 확인한다. 자료형·좌표·단위·미검출 의미는 팀 코드에서 일치시켜야 한다.</div>
+</section>
+
+<section id="topics">
+<h2>6. 토픽과 현재 basic 조합</h2>
+<p>아래 이름은 namespace가 없는 기본 실행 기준이다. <code>camera_raw</code>라는 이름도 이 패키지에서는 압축 영상 메시지를 뜻한다.</p>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">입출력</th><th scope="col">토픽</th><th scope="col">타입 / 설정</th></tr></thead><tbody>
+<tr><td>영상 입력</td><td><code>/camera</code><br><code>/camera_raw</code><br><code>/camera_raw_16_9</code></td><td><code>sensor_msgs/CompressedImage</code><br>sensor-data QoS: Best Effort, depth 5</td></tr>
+<tr><td>검출 선택</td><td><code>/driving/detection</code></td><td><code>std_msgs/String</code>, depth 10</td></tr>
+<tr><td>조향 선택</td><td><code>/driving/steering</code></td><td><code>std_msgs/String</code>, depth 10</td></tr>
+<tr><td>속도 출력</td><td><code>/cmd_vel</code></td><td><code>geometry_msgs/Twist</code>, depth 10</td></tr>
+<tr><td>디버깅 출력</td><td><code>/driving/debug/roi/compressed</code></td><td><code>sensor_msgs/CompressedImage</code><br>JPEG, sensor-data QoS</td></tr>
+</tbody></table></div>
+<div class="grid">
+<article class="card"><h3>Basic_Sat → Basic_P</h3><p>640×480 입력을 디코딩하고 투영 → 좌/우 ROI 선택 → 그레이스케일·블러·밝기 변환·이진화·형태학 처리 → 중심 x좌표를 구한다.</p><p>선택한 ROI 내부의 중심을 <code>Basic_P</code>에 넘기면 목표 x좌표와의 오차로 속도를 계산한다. 이 투영·좌표·좌우 설정은 basic 전용이다.</p><p>디버깅은 320×120 이진 ROI 위에 빨간 점을 표시한다. 점의 y=60은 표시용이며, 입력 header를 JPEG 메시지에 보존한다.</p></article>
+<article class="card"><h3>현재 조절할 수 있는 파라미터</h3><p><code>basic_p.left.normal_angular_divisor</code><br>기본값 <strong>1.7</strong></p><p><code>basic_p.right.normal_angular_divisor</code><br>기본값 <strong>1.3</strong></p><p>둘 다 0보다 큰 유한 실수다. 실행 중에는 <code>2</code> 대신 <code>2.0</code>처럼 실수로 지정한다. ROS에 저장한 값은 노드 재시작 후 자동으로 유지되지 않는다.</p></article>
+</div>
+<pre><code>ros2 param set /driving basic_p.left.normal_angular_divisor 2.0</code></pre>
+<details><summary>정상 영상의 미검출과 손상된 입력은 다르다</summary><p>basic에서 정상 영상의 미검출은 <code>None</code>이다. Basic_P는 이를 기존 극단값으로 바꾸어 전진·회전한다. 공통 노드가 <code>None</code>만 보고 정지시키지 않는다. 반면 디코딩 실패·지원하지 않는 해상도는 검출기가 예외로 알리고, 노드가 처리 실패로 0 Twist를 발행한다.</p></details>
+<details><summary>디버깅 실패가 조향에 미치는 영향</summary><p>디버깅 생성 중 예외는 <code>FrameResult.debug_error</code>에 담는다. 유효한 Twist는 유지하고 해당 영상은 보내지 않는다. 다만 JPEG 생성도 같은 worker에서 끝내므로 오래 걸리면 전체 결과가 0.5초 제한을 넘길 수 있다.</p></details>
+<details><summary>시간 제한과 종료에서 기억할 점</summary><ul><li>나이는 수신 시각 기준이다. 촬영 지연·전송 지연은 header로 검사하지 않는다.</li><li>steady clock으로 감시하지만, 콜백 지연과 실행 환경의 영향을 받아 하드 실시간을 보장하지 않는다.</li><li><code>destroy_node()</code>는 입력/타이머 처리를 막고 ROS가 살아 있으면 0 Twist를 보낸 뒤 worker를 기다린다. 영구 정지한 계산을 강제로 종료하는 기능은 없다.</li><li>입력이 끊겨도 디버깅 뷰어에 마지막 영상이 남을 수 있다.</li></ul></details>
+</section>
+
+<section id="reading">
+<h2>7. 소스에서 다시 찾아볼 위치</h2>
+<p><a href="../driving/driving.py">driving.py</a>를 열고 아래 함수 이름을 검색하면 된다. 핵심 계산을 먼저 읽고, 그다음 작업 추적과 발행 조건을 따라가면 이해하기 쉽다.</p>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">읽을 위치</th><th scope="col">확인할 내용</th></tr></thead><tbody>
+<tr><td><code>FrameJob / FrameResult</code></td><td>작업의 메타데이터와 계산 완료 결과의 구분</td></tr>
+<tr><td><code>_run_algorithms</code></td><td>detect → compute → Twist 검사 → 선택적 디버깅</td></tr>
+<tr><td><code>camera_*callback / process_frame</code></td><td>활성 입력 선택과 최신 대기 영상 저장</td></tr>
+<tr><td><code>_start_next_frame</code></td><td>작업 한 개 제출, Future와 수신 정보 보관</td></tr>
+<tr><td><code>_poll_pipeline</code></td><td>완료·세대·시간 검사, 발행/정지, 다음 작업 시작</td></tr>
+<tr><td><code>_replace_algorithms / _reset_processing</code></td><td>이름과 객체 교체, 이전 결과 무효화</td></tr>
+<tr><td><code>_validate_parameters / _configure_basic_p / _refresh_controller_parameters</code></td><td>변경 전 검사와 확정 후 실제 객체 반영의 구분</td></tr>
+<tr><td><code>main / __init__ / destroy_node</code></td><td>ROS·알고리즘·worker의 시작과 종료</td></tr>
+</tbody></table></div>
+<p>알고리즘 등록은 <a href="../driving/registry.py">registry.py</a>, 실제 이식 예제와 Git 기여 순서는 <a href="../CONTRIBUTING.md">CONTRIBUTING.md</a>를 참고한다. 알려진 한계는 <a href="../KNOWN_LIMITATIONS.md">KNOWN_LIMITATIONS.md</a>, 작업 원칙은 <a href="../AGENTS.md">AGENTS.md</a>에 정리되어 있다.</p>
+</section>
+<footer><p>이 문서는 현재 코드를 설명한다. 단계별 보기는 학습용 예시이며 로봇과 연결되지 않는다. 대상은 Galactic/Python 3.8이고 기존 실행 검증은 Humble/Python 3.10에서 수행했다. 실제 Galactic·실차 검증 상태와 구현 범위는 KNOWN_LIMITATIONS.md를 따른다.</p></footer>
+</main>
+<script>
+(() => {
+  'use strict';
+  const noJob = '_job = None';
+  const noPending = '_pending_frame = None';
+  const noResult = '아직 반환값 없음';
+  const pending = name => '_pending_frame =\n(수신 시각, 영상 ' + name + ')';
+  const job = (name, gen, time, status) => '영상 ' + name + '\ngeneration = ' + gen + '\nreceived_at = ' + time + '\nFuture: ' + status;
+  const result = (name, error = false) => '영상 ' + name + '\nFrameResult\n  twist: 유효한 Twist\n  debug_image: ' + (error ? 'None' : 'JPEG') + '\n  debug_error: ' + (error ? '인코딩 실패' : 'None');
+  const step = (time, title, note, j, p, r, output) => ({time, title, note, job: j, pending: p, result: r, output});
+  const scenarios = {
+    normal: [
+      step('0.000초', '시작: 아직 입력이 없다', '유효한 결과가 없으므로 감시 콜백이 실행되면 0 Twist를 발행한다.', noJob, noPending, noResult, '감시 시 출력: 0 Twist'),
+      step('0.000초', '영상 A 수신 → worker에 제출', '수신 시각과 현재 설정 번호 0을 FrameJob에 남긴다. 대기 슬롯의 영상은 worker에 넘겼으므로 슬롯은 비어 있다.', job('A', 0, '0.000', '처리 중'), noPending, noResult, '계산 결과 발행 전'),
+      step('0.020초', 'worker가 FrameResult를 반환', 'Future.done()은 True지만 아직 감시 콜백이 회수하지 않았다. 계산 완료와 ROS 발행은 다른 시점이다.', job('A', 0, '0.000', '완료'), noPending, result('A'), '계산 결과 발행 전'),
+      step('0.050초', '감시 콜백이 검사 후 발행', '설정 번호가 0으로 같고 입력 나이 0.050초 ≤ 0.5초다. 결과를 꺼내 발행하고 _last_valid_frame_at=0.000으로 저장한다.', noJob, noPending, 'A 결과 회수·발행 완료', '출력: A의 Twist + JPEG'),
+      step('0.550초', '이후 입력이 끊겼다', '마지막 유효 영상의 수신 시각에서 0.550초가 지났다. 감시 콜백은 다시 0 Twist를 발행한다.', noJob, noPending, '새 결과 없음', '출력: 0 Twist · JPEG 추가 발행 없음')
+    ],
+    queue: [
+      step('0.000초', '영상 A 처리 시작', 'worker는 한 번에 한 프레임을 처리한다.', job('A', 0, '0.000', '처리 중'), noPending, noResult, '새 결과 없음'),
+      step('0.010초', '영상 B가 들어온다', 'A의 작업이 남아 있으므로 B는 최신 대기 슬롯에 들어간다.', job('A', 0, '0.000', '처리 중'), pending('B'), noResult, 'A 처리 계속'),
+      step('0.020초', '영상 C가 들어온다', '대기 중인 B를 C로 교체한다. B는 계산하지 않는다. 처리 중인 A는 그대로 둔다.', job('A', 0, '0.000', '처리 중'), pending('C'), noResult, '대기 영상: B → C'),
+      step('0.030초', 'A의 계산이 끝난다', 'C가 기다리고 있어도 _job은 아직 A를 가리킨다. 다음 감시 콜백이 A를 회수해야 한다.', job('A', 0, '0.000', '완료'), pending('C'), result('A'), 'A 결과 발행 전'),
+      step('0.050초', 'A 발행 후 C를 제출한다', 'A는 유효하므로 발행한다. 같은 콜백 끝에서 C를 시작하고 C의 원래 수신 시각 0.020초를 보관한다.', job('C', 0, '0.020', '처리 중'), noPending, 'A 회수 완료 · C 계산 중', '출력: A의 Twist + JPEG'),
+      step('0.100초', 'C 완료 결과를 발행한다', 'C도 완료되었다고 가정한다. 입력 나이 0.080초와 설정 번호를 확인하고 발행한다.', noJob, noPending, 'C 결과 회수·발행 완료', '출력: C의 Twist + JPEG · B는 생략')
+    ],
+    switching: [
+      step('0.000초', '설정 번호 0으로 A 처리 중', '현재 worker는 제출 당시의 검출기와 조향기 객체를 사용한다.', job('A', 0, '0.000', '처리 중'), noPending, noResult, '새 결과 없음'),
+      step('0.010초', '알고리즘 선택 변경에 성공한다', '새 객체로 교체하고 현재 generation을 1로 올린다. A의 작업은 취소하지 않고 먼저 0 Twist를 발행한다.', job('A', 0, '0.000', '처리 중'), noPending, noResult, '현재 generation = 1 · 출력: 0 Twist'),
+      step('0.020초', '새 선택의 영상 B가 들어온다', 'B를 저장하지만 A가 아직 끝나지 않아 시작하지 못한다.', job('A', 0, '0.000', '처리 중'), pending('B'), noResult, '현재 generation = 1 · B 대기'),
+      step('0.030초', 'A가 예전 조향 결과를 반환한다', '결과는 Future 안에 준비되었지만 현재 선택으로 계산한 결과가 아니다.', job('A', 0, '0.000', '완료'), pending('B'), result('A'), 'A 결과 발행 전'),
+      step('0.050초', 'A를 버리고 B를 시작한다', 'A의 generation=0과 현재=1이 다르다. A의 Twist와 JPEG는 버린다. 그 뒤 새 객체로 B를 시작한다.', job('B', 1, '0.020', '처리 중'), noPending, 'A 결과 폐기 · B 계산 중', '출력: 0 Twist · A의 JPEG는 생략'),
+      step('0.100초', 'B의 완료 결과는 발행한다', 'B도 완료되었다고 가정한다. B의 generation=1과 현재=1이 같고 입력 나이도 허용 범위다.', noJob, noPending, 'B 결과 회수·발행 완료', '출력: 새 알고리즘으로 계산한 B의 Twist + JPEG')
+    ],
+    timeout: [
+      step('0.000초', 'A의 긴 계산이 시작된다', '여기서는 앞서 발행한 유효 결과가 없는 상태로 시작한다.', job('A', 0, '0.000', '처리 중'), noPending, noResult, '감시 시 출력: 0 Twist'),
+      step('0.550초', '감시 콜백은 정지 명령을 보낸다', 'worker가 아직 계산 중이어도 감시 콜백은 기다리지 않는다. 유효한 결과가 없으므로 0 Twist를 보낸다.', job('A', 0, '0.000', '처리 중'), noPending, noResult, '출력: 0 Twist'),
+      step('0.650초', '늦게 FrameResult가 만들어진다', '계산은 끝났지만 수신 시각 기준 허용 시간을 이미 넘겼다.', job('A', 0, '0.000', '완료'), noPending, result('A'), '계산 결과 발행 전'),
+      step('0.700초', '늦은 결과를 폐기한다', '감시 시 입력 나이 0.700초 > 0.5초다. A의 결과를 발행하지 않는다.', noJob, noPending, 'A 결과 폐기', '출력: 0 Twist · JPEG 추가 발행 없음')
+    ],
+    debug: [
+      step('0.000초', 'A의 검출과 조향을 계산한다', 'worker는 검출 → 조향 → 출력 검사 → 선택적 디버깅 순서로 실행한다.', job('A', 0, '0.000', '처리 중'), noPending, noResult, '계산 결과 발행 전'),
+      step('0.020초', 'JPEG 생성 중 예외가 발생한다', 'Twist는 유효하다. 디버깅 예외만 잡아 debug_error에 담고 FrameResult를 반환한다.', job('A', 0, '0.000', '완료'), noPending, result('A', true), '정상 Twist와 경고 문구가 함께 준비됨'),
+      step('0.050초', '조향을 발행하고 경고를 남긴다', '설정·시간 검사를 통과했으므로 Twist를 발행한다. debug_image=None이라 영상은 생략한다.', noJob, noPending, 'A 결과 회수 완료 · 디버깅 경고', '출력: A의 Twist · 로그: 인코딩 실패 · JPEG 생략')
+    ]
+  };
+  const select = document.getElementById('scenario');
+  const previous = document.getElementById('previous');
+  const next = document.getElementById('next');
+  let index = 0;
+  function render() {
+    const items = scenarios[select.value];
+    const current = items[index];
+    document.getElementById('step-count').textContent = (index + 1) + ' / ' + items.length + ' 단계 · ' + current.time;
+    document.getElementById('step-title').textContent = current.title;
+    document.getElementById('step-note').textContent = current.note;
+    document.getElementById('job-state').textContent = current.job;
+    document.getElementById('pending-state').textContent = current.pending;
+    document.getElementById('result-state').textContent = current.result;
+    document.getElementById('output-state').textContent = current.output;
+    previous.disabled = index === 0;
+    next.disabled = index === items.length - 1;
+  }
+  select.addEventListener('change', () => { index = 0; render(); });
+  previous.addEventListener('click', () => { if (index > 0) { index -= 1; render(); } });
+  next.addEventListener('click', () => { if (index < scenarios[select.value].length - 1) { index += 1; render(); } });
+  render();
+  document.documentElement.classList.add('js-ready');
+})();
+</script>
+</body>
+</html>
