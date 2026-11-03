@@ -11,8 +11,12 @@ import cv2
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
+from rcl_interfaces.msg import SetParametersResult
+from rcl_interfaces.srv import SetParameters
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 
@@ -22,6 +26,7 @@ from driving.detection.basic_sat import Basic_Sat
 from driving.driving import DrivingNode
 from driving.registry import CONTROLLERS, DETECTORS, create_algorithms
 from driving.steering.basic_p import Basic_P
+from driving.steering.basic_p_parameters import PARAMETER_NAMES
 
 
 def image_message(image):
@@ -52,6 +57,11 @@ class RawDetector:
         center = msg.data[0]
         self.seen.append(center)
         return center
+
+
+class DebugRawDetector(RawDetector):
+    def get_debug_image(self):
+        return image_message(np.zeros((8, 8, 3), dtype=np.uint8))
 
 
 class AlternateController:
@@ -91,6 +101,39 @@ class PathController:
 
 
 class AlgorithmTests(unittest.TestCase):
+    def test_debug_roi_marks_detected_x_in_both_modes_and_preserves_header(self):
+        msg = straight_lane()
+        msg.header.stamp.sec = 123
+        msg.header.stamp.nanosec = 456
+        msg.header.frame_id = 'camera_optical_frame'
+        for mode, expected in ((True, 60), (False, 260)):
+            with self.subTest(lane_mode=mode):
+                detector = Basic_Sat(lane_mode=mode)
+                self.assertIsNone(detector.get_debug_image())
+                self.assertEqual(detector.detect(msg), expected)
+                debug = detector.get_debug_image()
+                self.assertEqual(debug.header, msg.header)
+                self.assertEqual(debug.format, 'jpeg')
+                self.assertTrue(bytes(debug.data).startswith(b'\xff\xd8'))
+                image = cv2.imdecode(np.frombuffer(debug.data, np.uint8), cv2.IMREAD_COLOR)
+                self.assertEqual(image.shape, (120, 320, 3))
+                # JPEG는 손실 압축이므로 점의 색은 오차를 허용해 확인한다.
+                np.testing.assert_allclose(image[60, expected], [0, 0, 255], atol=40)
+                self.assertGreater(np.count_nonzero(image[:, :, 0] > 200), 100)
+
+    def test_debug_missing_lane_has_no_dot_and_invalid_frame_clears_previous_image(self):
+        detector = Basic_Sat()
+        detector.detect(straight_lane())
+        self.assertIsNotNone(detector.get_debug_image())
+        self.assertIsNone(detector.detect(image_message(np.zeros((480, 640, 3), dtype=np.uint8))))
+        debug = detector.get_debug_image()
+        image = cv2.imdecode(np.frombuffer(debug.data, np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual(image.shape, (120, 320, 3))
+        self.assertEqual(np.count_nonzero(image), 0)
+        with self.assertRaises(ValueError):
+            detector.detect(CompressedImage(data=b'broken'))
+        self.assertIsNone(detector.get_debug_image())
+
     def test_straight_lane_in_both_modes(self):
         msg = straight_lane()
         for lane_mode, expected in ((True, 60), (False, 260)):
@@ -153,6 +196,41 @@ class AlgorithmTests(unittest.TestCase):
         self.assertIs(controller.last_result, result)
 
 
+class StartupParameterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        rclpy.init(args=['--ros-args', '-r', '__ns:=/driving_startup_test'])
+
+    @classmethod
+    def tearDownClass(cls):
+        rclpy.shutdown()
+
+    def test_only_two_divisors_are_parameters_and_startup_overrides_apply(self):
+        for mode, expected in ((True, 1.0 / 3.4), (False, (-60.0 / 77.0) / 2.6)):
+            with patch.object(basic, 'SETTINGS', basic.BasicSettings(lane_mode=mode)):
+                node = DrivingNode(parameter_overrides=[
+                    Parameter(PARAMETER_NAMES['left'], value=3.4),
+                    Parameter(PARAMETER_NAMES['right'], value=2.6),
+                ])
+            try:
+                self.assertEqual(
+                    {'basic_p.' + name for name in node.get_parameters_by_prefix('basic_p')},
+                    set(PARAMETER_NAMES.values()),
+                )
+                self.assertFalse(node.has_parameter('basic_p.base_speed'))
+                self.assertFalse(node.has_parameter('basic_p.left.target_x'))
+                twist = node.controller.compute(None)
+                self.assertAlmostEqual(twist.angular.z, expected)
+                self.assertAlmostEqual(twist.linear.x, Basic_P(lane_mode=mode).compute(None).linear.x)
+            finally:
+                node.destroy_node()
+
+    def test_invalid_startup_divisors_are_rejected(self):
+        for side, value in (('left', 0.0), ('left', -1.0), ('right', float('nan'))):
+            with self.subTest(side=side, value=value), self.assertRaises(ValueError):
+                DrivingNode(parameter_overrides=[Parameter(PARAMETER_NAMES[side], value=value)])
+
+
 class NodeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -165,13 +243,17 @@ class NodeTests(unittest.TestCase):
     def setUp(self):
         self.node = DrivingNode()
         self.commands = []
+        self.debug_images = []
         # 노드 자원은 실제로 만들되 콜백 단위 검사에서 속도를 외부로 보내지 않는다.
         self.publisher_patch = patch.object(self.node.cmd_vel_pub, 'publish', self.commands.append)
         self.publisher_patch.start()
+        self.debug_publisher_patch = patch.object(self.node.debug_image_pub, 'publish', self.debug_images.append)
+        self.debug_publisher_patch.start()
 
     def tearDown(self):
         self.node.destroy_node()
         self.publisher_patch.stop()
+        self.debug_publisher_patch.stop()
 
     def finish_frame(self):
         deadline = time.monotonic() + 2.0
@@ -193,10 +275,12 @@ class NodeTests(unittest.TestCase):
         self.node.camera_raw_16_9_callback(CompressedImage(data=b'invalid'))
         self.assertIsNone(self.node._job)
         self.assertEqual(self.commands, [])
+        self.assertEqual(self.debug_images, [])
         self.node.camera_callback(straight_lane())
         self.finish_frame()
         self.assertAlmostEqual(self.commands[-1].linear.x, 0.22)
         self.assertEqual(self.commands[-1].angular.z, 0.0)
+        self.assertEqual(len(self.debug_images), 1)
 
     def test_selection_changes_actual_algorithms_and_source(self):
         self.register_alternates()
@@ -243,12 +327,29 @@ class NodeTests(unittest.TestCase):
         self.node.camera_callback(msg)
         self.finish_frame()
         self.assertGreater(self.commands[-1].linear.x, 0)
+        self.assertEqual(len(self.debug_images), 1)
         self.node.camera_callback(CompressedImage(data=b'corrupt'))
         self.finish_frame()
         self.assertEqual(self.commands[-1], Twist())
+        self.assertEqual(len(self.debug_images), 1)
         self.node.camera_callback(msg)
         self.finish_frame()
         self.assertAlmostEqual(self.commands[-1].linear.x, 0.22)
+        self.assertEqual(len(self.debug_images), 2)
+
+    def test_debug_failure_does_not_replace_valid_steering_and_can_recover(self):
+        for failure in ('exception', 'wrong_type', 'empty'):
+            with self.subTest(failure=failure):
+                kwargs = ({'side_effect': ValueError('encoding failed')} if failure == 'exception'
+                          else {'return_value': 123 if failure == 'wrong_type' else CompressedImage()})
+                with patch.object(self.node.detector, 'get_debug_image', **kwargs):
+                    self.node.camera_callback(straight_lane())
+                    self.finish_frame()
+                self.assertAlmostEqual(self.commands[-1].linear.x, 0.22)
+                self.assertEqual(self.debug_images, [])
+        self.node.camera_callback(straight_lane())
+        self.finish_frame()
+        self.assertEqual(len(self.debug_images), 1)
 
     def test_basic_pair_uses_its_own_settings_after_selection(self):
         self.register_alternates()
@@ -286,11 +387,12 @@ class NodeTests(unittest.TestCase):
         self.finish_frame()
         self.assertEqual(self.node.controller.last_result, PathResult(()))
         self.assertEqual(self.commands[-1], Twist())
+        self.assertEqual(self.debug_images, [])  # 디버깅 메서드는 팀 코드의 필수 조건이 아니다.
 
     def test_switch_discards_inflight_result_and_queued_old_frame(self):
         started, release = Event(), Event()
 
-        class SlowDetector(RawDetector):
+        class SlowDetector(DebugRawDetector):
             def detect(self, msg):
                 started.set()
                 release.wait(2.0)
@@ -307,6 +409,7 @@ class NodeTests(unittest.TestCase):
             release.set()
         self.finish_frame()
         self.assertTrue(all(msg == Twist() for msg in self.commands))
+        self.assertEqual(self.debug_images, [])
         self.node.camera_callback(straight_lane())
         self.finish_frame()
         self.assertAlmostEqual(self.commands[-1].linear.x, 0.22)
@@ -334,11 +437,12 @@ class NodeTests(unittest.TestCase):
 
     def test_timeout_stops_even_if_worker_has_not_finished(self):
         started, release = Event(), Event()
-        self.register_alternates()
+        self.register_alternates(detector=DebugRawDetector)
         self.node.lane_detection_selection_callback(String(data='basic_sobel'))
         self.node.camera_raw_callback(CompressedImage(data=b'\x3c'))
         self.finish_frame()
         self.assertGreater(self.commands[-1].linear.x, 0)
+        self.assertEqual(len(self.debug_images), 1)
 
         def slow_detect(msg):
             started.set()
@@ -353,10 +457,12 @@ class NodeTests(unittest.TestCase):
             with patch('driving.driving.monotonic', return_value=future_time):
                 self.node._poll_pipeline()
                 self.assertEqual(self.commands[-1], Twist())
+                self.assertEqual(len(self.debug_images), 1)
                 release.set()
                 self.node._job.future.result(timeout=1.0)
                 self.node._poll_pipeline()
                 self.assertEqual(self.commands[-1], Twist())
+                self.assertEqual(len(self.debug_images), 1)
         finally:
             release.set()
 
@@ -373,8 +479,113 @@ class NodeTests(unittest.TestCase):
         self.finish_frame()
         self.assertEqual(self.commands[-1], Twist())
 
+    def test_divisor_update_changes_angular_velocity_only_and_same_value_is_noop(self):
+        frame = image_message(np.zeros((480, 640, 3), dtype=np.uint8))
+        self.node.camera_callback(frame)
+        self.finish_frame()
+        previous = self.commands[-1]
+        old_controller = self.node.controller
+        result = self.node.set_parameters_atomically([
+            Parameter(PARAMETER_NAMES['left'], value=3.4),
+        ])
+        self.assertTrue(result.successful)
+        self.node._poll_pipeline()
+        self.assertEqual(self.commands[-1], Twist())
+        self.assertIsNot(self.node.controller, old_controller)
+        self.assertEqual(old_controller.angular_divisors.left, 1.7)
+        self.assertEqual(self.node.controller.angular_divisors.right, 1.3)
+        self.node.camera_callback(frame)
+        self.finish_frame()
+        self.assertAlmostEqual(self.commands[-1].angular.z, previous.angular.z / 2.0)
+        self.assertEqual(self.commands[-1].linear.x, previous.linear.x)
+
+        controller, generation = self.node.controller, self.node._generation
+        result = self.node.set_parameters_atomically([
+            Parameter(PARAMETER_NAMES['left'], value=3.4),
+        ])
+        self.assertTrue(result.successful)
+        self.node._poll_pipeline()
+        self.assertIs(self.node.controller, controller)
+        self.assertEqual(self.node._generation, generation)
+
+    def test_rejected_parameters_do_not_change_controller_or_saved_values(self):
+        controller, generation = self.node.controller, self.node._generation
+        for value in (0.0, -1.0, float('nan'), float('inf'), 2, True, '2.0'):
+            with self.subTest(value=value):
+                result = self.node.set_parameters_atomically([
+                    Parameter(PARAMETER_NAMES['left'], value=value),
+                ])
+                self.assertFalse(result.successful)
+                self.assertEqual(self.node.get_parameter(PARAMETER_NAMES['left']).value, 1.7)
+
+        result = self.node.set_parameters_atomically([
+            Parameter(PARAMETER_NAMES['left'], value=3.4),
+            Parameter(PARAMETER_NAMES['right'], value=0.0),
+        ])
+        self.assertFalse(result.successful)
+        self.assertEqual(self.node.get_parameter(PARAMETER_NAMES['left']).value, 1.7)
+
+        def reject_after_validation(parameters):
+            return SetParametersResult(successful=False, reason='Test rejection')
+
+        validator = self.node._basic_p_parameters.validate
+        self.node.remove_on_set_parameters_callback(validator)
+        self.node.add_on_set_parameters_callback(reject_after_validation)
+        self.node.add_on_set_parameters_callback(validator)
+        result = self.node.set_parameters_atomically([
+            Parameter(PARAMETER_NAMES['left'], value=3.4),
+        ])
+        self.assertFalse(result.successful)
+        self.node._poll_pipeline()
+        self.assertIs(self.node.controller, controller)
+        self.assertEqual(self.node._generation, generation)
+        self.assertEqual(self.node.get_parameter(PARAMETER_NAMES['left']).value, 1.7)
+
+    def test_parameters_survive_selection_and_do_not_modify_other_algorithms(self):
+        self.register_alternates()
+        self.node.steering_selection_callback(String(data='pure_pursuit'))
+        controller, generation = self.node.controller, self.node._generation
+        result = self.node.set_parameters_atomically([
+            Parameter(PARAMETER_NAMES['left'], value=3.4),
+        ])
+        self.assertTrue(result.successful)
+        self.node._poll_pipeline()
+        self.assertIs(self.node.controller, controller)
+        self.assertEqual(self.node._generation, generation)
+        self.node.steering_selection_callback(String(data='basic_p'))
+        self.assertAlmostEqual(self.node.controller.compute(None).angular.z, 1.0 / 3.4)
+
+    def test_divisor_update_discards_result_computed_with_previous_value(self):
+        started, release = Event(), Event()
+
+        class SlowDetector(DebugRawDetector):
+            def detect(self, msg):
+                started.set()
+                release.wait(2.0)
+                return super().detect(msg)
+
+        self.register_alternates(detector=SlowDetector)
+        self.node.lane_detection_selection_callback(String(data='basic_sobel'))
+        self.node.camera_raw_callback(CompressedImage(data=b'\x00'))
+        self.assertTrue(started.wait(1.0))
+        try:
+            result = self.node.set_parameters_atomically([
+                Parameter(PARAMETER_NAMES['left'], value=3.4),
+            ])
+            self.assertTrue(result.successful)
+            self.node._poll_pipeline()
+        finally:
+            release.set()
+        self.finish_frame()
+        self.assertTrue(all(msg == Twist() for msg in self.commands))
+        self.assertEqual(self.debug_images, [])
+        self.node.camera_raw_callback(CompressedImage(data=b'\x00'))
+        self.finish_frame()
+        self.assertAlmostEqual(self.commands[-1].angular.z, 1.0 / 3.4)
+
     def test_real_dds_callbacks_switch_and_watchdog(self):
         self.publisher_patch.stop()
+        self.debug_publisher_patch.stop()
         self.register_alternates()
         probe = Node('probe')
         executor = SingleThreadedExecutor()
@@ -384,7 +595,12 @@ class NodeTests(unittest.TestCase):
         raw = probe.create_publisher(CompressedImage, 'camera_raw', 10)
         detection = probe.create_publisher(String, 'driving/detection', 10)
         steering = probe.create_publisher(String, 'driving/steering', 10)
+        parameters = probe.create_client(SetParameters, 'driving/set_parameters')
         probe.create_subscription(Twist, 'cmd_vel', self.commands.append, 10)
+        probe.create_subscription(
+            CompressedImage, 'driving/debug/roi/compressed', self.debug_images.append,
+            qos_profile_sensor_data,
+        )
 
         def spin_until(predicate, timeout=3.0):
             deadline = time.monotonic() + timeout
@@ -394,8 +610,26 @@ class NodeTests(unittest.TestCase):
 
         try:
             spin_until(lambda: all(pub.get_subscription_count() for pub in (camera, raw, detection, steering)))
-            camera.publish(straight_lane())
+            spin_until(lambda: self.node.debug_image_pub.get_subscription_count() > 0)
+            frame = straight_lane()
+            frame.header.stamp.sec = 123
+            frame.header.frame_id = 'camera_optical_frame'
+            camera.publish(frame)
             spin_until(lambda: any(msg.linear.x == 0.22 for msg in self.commands))
+            spin_until(lambda: bool(self.debug_images))
+            self.assertEqual(self.debug_images[-1].header, frame.header)
+            self.assertEqual(self.debug_images[-1].format, 'jpeg')
+            decoded = cv2.imdecode(np.frombuffer(self.debug_images[-1].data, np.uint8), cv2.IMREAD_COLOR)
+            self.assertEqual(decoded.shape, (120, 320, 3))
+            np.testing.assert_allclose(decoded[60, 60], [0, 0, 255], atol=40)
+            spin_until(parameters.service_is_ready)
+            future = parameters.call_async(SetParameters.Request(parameters=[
+                Parameter(PARAMETER_NAMES['left'], value=3.4).to_parameter_msg(),
+            ]))
+            spin_until(future.done)
+            self.assertTrue(future.result().results[0].successful)
+            camera.publish(image_message(np.zeros((480, 640, 3), dtype=np.uint8)))
+            spin_until(lambda: any(abs(msg.angular.z - 1.0 / 3.4) < 1e-9 for msg in self.commands))
             detection.publish(String(data='basic_sobel'))
             steering.publish(String(data='pure_pursuit'))
             spin_until(lambda: self.node.lane_detection_algorithm == 'basic_sobel' and self.node.steering_algorithm == 'pure_pursuit')
@@ -409,6 +643,7 @@ class NodeTests(unittest.TestCase):
             executor.shutdown()
             probe.destroy_node()
             self.publisher_patch.start()
+            self.debug_publisher_patch.start()
 
 
 if __name__ == '__main__':

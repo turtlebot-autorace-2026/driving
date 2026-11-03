@@ -1,6 +1,7 @@
 from geometry_msgs.msg import Twist
 from dataclasses import dataclass
 from math import isfinite
+from typing import Optional
 import numpy as np
 
 from driving import basic
@@ -17,6 +18,13 @@ class Config:
     debug_window: str
     debug_color: tuple  # (0, 0, 255): red
 
+
+@dataclass(frozen=True)
+class AngularDivisors:
+    """한 프레임 계산 중에는 바뀌지 않는 좌우 조향 분모."""
+
+    left: float
+    right: float
 
 
 class Basic_P:
@@ -43,8 +51,20 @@ class Basic_P:
             debug_color=(255, 0, 0),
         )
 
-    def __init__(self, lane_mode: bool = True):
+    def __init__(
+        self, lane_mode: bool = True, angular_divisors: Optional[AngularDivisors] = None,
+    ):
         self.lane_mode = lane_mode  # True: Left
+        self.angular_divisors = (
+            self.default_angular_divisors() if angular_divisors is None else angular_divisors
+        )
+
+    @classmethod
+    def default_angular_divisors(cls) -> AngularDivisors:
+        return AngularDivisors(
+            left=cls.LEFT_LANE_CONFIG.normal_angular_divisor,
+            right=cls.RIGHT_LANE_CONFIG.normal_angular_divisor,
+        )
 
     @classmethod
     def from_settings(cls) -> 'Basic_P':
@@ -80,7 +100,9 @@ class Basic_P:
         # else:
         base_speed = 0.22
         linear_divisor = 1.5
-        angular_divisor = config.normal_angular_divisor
+        angular_divisor = (
+            self.angular_divisors.left if self.lane_mode else self.angular_divisors.right
+        )
 
 
         twist.linear.x = base_speed / (1 + abs(normalized_error / linear_divisor))

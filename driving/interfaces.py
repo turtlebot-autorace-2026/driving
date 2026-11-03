@@ -5,7 +5,7 @@ detect/compute는 유한 시간에 반환하고, 결과 형식과 미검출 표�
 노드는 결과를 해석하지 않고 조향기로 전달한다. 여러 영상의 동기화는 별도 확장이다.
 """
 
-from typing import Literal, Protocol, TypeVar
+from typing import Literal, Optional, Protocol, TypeVar, runtime_checkable
 
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import CompressedImage
@@ -22,6 +22,15 @@ class LaneDetector(Protocol[DetectionResult]):
 
     def detect(self, camera_msg: CompressedImage) -> DetectionResult:
         """디코딩/전처리/검출을 담당한다. 잘못된 입력은 예외로 알린다."""
+        ...
+
+
+@runtime_checkable
+class DebugImageProvider(Protocol):
+    """선택 기능. detect 직후 같은 worker에서 호출하며 ROS 발행은 노드가 맡는다."""
+
+    def get_debug_image(self) -> Optional[CompressedImage]:
+        """방금 처리한 영상의 header와 오버레이를 반환한다. 없으면 None."""
         ...
 
 

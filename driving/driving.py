@@ -12,10 +12,11 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 
-from driving.interfaces import CameraTopic, LaneDetector, SteeringController
+from driving.interfaces import CameraTopic, DebugImageProvider, LaneDetector, SteeringController
 from driving.registry import (
     DEFAULT_DETECTION, DEFAULT_STEERING, Detection, Steering, create_algorithms,
 )
+from driving.steering.basic_p_parameters import BasicPParameters
 
 
 ResultT = TypeVar('ResultT')
@@ -28,13 +29,20 @@ class FrameJob:
     future: Future
 
 
+@dataclass
+class FrameResult:
+    twist: Twist
+    debug_image: Optional[CompressedImage] = None
+    debug_error: Optional[str] = None
+
+
 class DrivingNode(Node):
     # 수신 시각 기준 유효 결과의 최대 나이. 촬영 장치의 시계와는 비교하지 않는다.
     FRAME_TIMEOUT_SEC = 0.5
     POLL_PERIOD_SEC = 0.05
 
-    def __init__(self):
-        super().__init__('driving')
+    def __init__(self, *, parameter_overrides=None):
+        super().__init__('driving', parameter_overrides=parameter_overrides)
 
         self.camera_msg: Optional[CompressedImage] = None
         self.camera_raw_msg: Optional[CompressedImage] = None
@@ -42,9 +50,15 @@ class DrivingNode(Node):
 
         self.steering_algorithm: Steering = DEFAULT_STEERING
         self.lane_detection_algorithm: Detection = DEFAULT_DETECTION
-        self.detector, self.controller = create_algorithms(
-            self.lane_detection_algorithm, self.steering_algorithm,
-        )
+        try:
+            self._basic_p_parameters = BasicPParameters(self)
+            self.detector, self.controller = create_algorithms(
+                self.lane_detection_algorithm, self.steering_algorithm,
+            )
+            self.controller = self._basic_p_parameters.configure_controller(self.controller)
+        except Exception:
+            super().destroy_node()
+            raise
 
         # ROS 콜백은 가볍게 유지하고, 영상 처리는 한 worker에서 순서대로 한다.
         # 처리 중 새 영상이 오면 대기 영상 한 장만 최신값으로 교체한다.
@@ -55,6 +69,9 @@ class DrivingNode(Node):
         self._last_valid_frame_at: Optional[float] = None
         self._closed = False
         self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+        self.debug_image_pub = self.create_publisher(
+            CompressedImage, 'driving/debug/roi/compressed', qos_profile_sensor_data,
+        )
 
         self.camera_subscription = self.create_subscription(
             CompressedImage,
@@ -108,6 +125,7 @@ class DrivingNode(Node):
         # 세 영상 모두 구독하지만 선택된 검출기의 입력만 실행한다.
         if self._closed or input_topic != self.detector.input_topic:
             return
+        self._refresh_controller_parameters()
         self._pending_frame = (monotonic(), msg)
         self._start_next_frame()
 
@@ -127,7 +145,7 @@ class DrivingNode(Node):
     def _run_algorithms(
         detector: LaneDetector[ResultT], controller: SteeringController[ResultT],
         msg: CompressedImage,
-    ) -> Twist:
+    ) -> FrameResult:
         # 알고리즘마다 다른 메서드명을 노드에서 분기하지 않는다.
         result = detector.detect(msg)
         twist = controller.compute(result)
@@ -139,35 +157,66 @@ class DrivingNode(Node):
         )
         if not all(isfinite(value) for value in values):
             raise ValueError('Steering returned a non-finite velocity.')
-        return twist
+        frame = FrameResult(twist=twist)
+        # 영상 생성/압축도 같은 worker에서 끝내고, 해당 프레임의 결과와 함께 전달한다.
+        # 선택 기능이므로 디버깅 오류가 정상 조향 결과를 덮어쓰지 않도록 한다.
+        try:
+            if isinstance(detector, DebugImageProvider):
+                debug_image = detector.get_debug_image()
+                if debug_image is not None:
+                    if not isinstance(debug_image, CompressedImage) or not debug_image.data:
+                        raise TypeError('get_debug_image() must return a nonempty CompressedImage or None.')
+                    frame.debug_image = debug_image
+        except Exception as error:
+            frame.debug_error = str(error)
+        return frame
 
     def _poll_pipeline(self):
         if self._closed:
             return
+        self._refresh_controller_parameters()
         now = monotonic()
         if self._job is not None and self._job.future.done():
             job, self._job = self._job, None
             # 선택 변경 전 결과와 처리 시간이 너무 긴 결과는 발행하지 않는다.
             if job.generation == self._generation and now - job.received_at <= self.FRAME_TIMEOUT_SEC:
                 try:
-                    twist = job.future.result()
+                    frame = job.future.result()
                 except Exception as error:
                     # 결과의 의미는 알고리즘이 처리하고, 노드는 실행 오류를 처리한다.
                     self.get_logger().warning(f'Frame processing failed: {error}')
                     self._last_valid_frame_at = None
                 else:
                     self._last_valid_frame_at = job.received_at
-                    self.cmd_vel_pub.publish(twist)
+                    self.cmd_vel_pub.publish(frame.twist)
+                    if frame.debug_error is not None:
+                        self.get_logger().warning(f'Debug image failed: {frame.debug_error}')
+                    if frame.debug_image is not None:
+                        self.debug_image_pub.publish(frame.debug_image)
 
         if self._last_valid_frame_at is None or now - self._last_valid_frame_at > self.FRAME_TIMEOUT_SEC:
             self.cmd_vel_pub.publish(Twist())
         self._start_next_frame()
+
+    def _refresh_controller_parameters(self):
+        # Galactic의 검증 콜백이 끝나 실제 저장된 파라미터만 적용한다.
+        controller = self._basic_p_parameters.configure_controller(self.controller)
+        if controller is not self.controller:
+            self.controller = controller
+            self._reset_processing()
+
+    def _reset_processing(self):
+        self._generation += 1
+        self._pending_frame = None
+        self._last_valid_frame_at = None
+        self.cmd_vel_pub.publish(Twist())
 
     def _replace_algorithms(
         self, detection: Detection, steering: Steering,
     ) -> bool:
         try:
             detector, controller = create_algorithms(detection, steering)
+            controller = self._basic_p_parameters.configure_controller(controller)
         except Exception as error:
             self.get_logger().warning(f'Algorithm selection rejected: {error}')
             return False
@@ -177,13 +226,10 @@ class DrivingNode(Node):
         self.detector, self.controller = detector, controller
         self.lane_detection_algorithm = detection
         self.steering_algorithm = steering
-        self._generation += 1
-        self._pending_frame = None
-        self._last_valid_frame_at = None
+        self._reset_processing()
         self.camera_msg = None
         self.camera_raw_msg = None
         self.camera_raw_16_9_msg = None
-        self.cmd_vel_pub.publish(Twist())
         return True
 
     def steering_selection_callback(self, msg: String):
