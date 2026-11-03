@@ -1,0 +1,27 @@
+# ROS 2 / colcon build output
+build/
+install/
+log/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+.venv/
+venv/
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
