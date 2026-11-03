@@ -22,6 +22,7 @@ setup(
     entry_points={
         'console_scripts': [
             'driving = driving.driving:main',
+            'driving_debug = driving.debug_viewer:main',
         ],
     },
 )

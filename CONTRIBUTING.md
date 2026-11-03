@@ -22,6 +22,8 @@ Ubuntu 20.04 / Python 3.8**이다.
 
 디버깅은 `get_debug_image()`를 추가하면 되고, ROS 파라미터가 필요할 때만
 노드의 선언·검증·적용 부분을 수정한다. 별도 상속이나 결과 형식 식별자는 필요 없다.
+발행한 영상은 별도 `driving_debug` 노드로 볼 수 있다.
+바로 실행하려면 [OpenCV 뷰어 사용법](#85-opencv-창으로-입력과-디버깅-영상-보기)을 참고한다.
 
 ## 목차
 
@@ -38,7 +40,20 @@ Ubuntu 20.04 / Python 3.8**이다.
 
 ## 1. 전체 구조와 파일 위치
 
-### 한 노드 안에서 알고리즘을 교체한다
+### 주행 노드와 로컬 뷰어의 역할
+
+주행 계산은 하나의 `driving` 노드에서 처리하고, 화면이 필요할 때 `driving_debug`를
+별도 터미널에서 추가로 실행한다. 두 노드는 ROS 영상 토픽으로 연결된다.
+
+| 실행 명령 | 담당 기능 |
+| --- | --- |
+| `ros2 run driving driving` | 검출·조향 계산, cmd_vel과 디버깅 JPEG 발행 |
+| `ros2 run driving driving_debug` | 카메라 입력 3개와 디버깅 JPEG의 OpenCV 창 표시 |
+
+`driving_debug`가 없어도 주행 노드는 동작한다. 뷰어는 카메라 발행기나 주행 노드를
+자동으로 시작하지 않으며, 영상이 발행 중이라면 주행 노드 없이도 카메라 창을 볼 수 있다.
+
+아래는 `driving` 내부의 계산 흐름이다.
 
 ```text
 camera / camera_raw / camera_raw_16_9 (CompressedImage)
@@ -57,21 +72,23 @@ camera / camera_raw / camera_raw_16_9 (CompressedImage)
              └─ driving/debug/roi/compressed
 ```
 
-노드는 영상 수신과 ROS 통신을 담당한다. 팀원은 **한 영상에서 결과를 구하는 코드**와
+`driving`은 영상 수신과 주행 관련 ROS 통신을 담당한다. 팀원은 **한 영상에서 결과를 구하는 코드**와
 **그 결과로 Twist를 만드는 코드**를 가져오면 된다. 기존 프로그램의 ROS 노드를 통째로
 추가하는 방식은 이 구조와 맞지 않는다.
 
 | 경로 | 역할 / 수정하는 경우 |
 | --- | --- |
 | `driving/driving.py` | 구독·선택·파라미터·계산 호출·발행·중단 감시 |
+| `driving/debug_viewer.py` | 로컬에서 입력/디버깅 영상을 표시하는 별도 `driving_debug` 노드 |
 | `driving/registry.py` | 선택 이름과 실제 클래스/생성 함수 연결 |
 | `driving/detection/` | 전처리를 포함한 팀 검출 코드 |
 | `driving/steering/` | 팀 조향 코드 |
 | `driving/basic.py` | basic 조합 전용 결과 형식과 좌우 설정 |
 | `test/test_pipeline.py` | 기존 알고리즘 및 ROS 파이프라인 회귀 검사 |
+| `test/test_debug_viewer.py` | 뷰어의 영상 수신·디코딩·종료 검사 |
 | `package.xml`, `setup.py` | 의존성, Python 패키지와 리소스 설치 |
 
-노드 안의 주석은 **주행 계산 → 영상 입력 → 알고리즘 선택 → 파라미터 → 실행 관리**
+`driving.py` 안의 주석은 **주행 계산 → 영상 입력 → 알고리즘 선택 → 파라미터 → 실행 관리**
 순서다. 일반적인 검출·조향 추가에는 마지막 실행 관리 부분을 수정할 필요가 없다.
 
 현재 실제 구현은 `basic_sat` / `basic_p`다. `basic_sobel`, `yolo`, `pure_pursuit`는
@@ -97,9 +114,11 @@ namespace/remap을 사용하면 실제 경로가 바뀐다.
 선행 `/` 없이 `camera`, `camera_raw`, `camera_raw_16_9` 중 하나를 적는다.
 기존 발행 토픽 이름이 다르면 remap을 사용한다. 메시지 타입이 다르면 별도 변환이 필요하다.
 
-세 입력을 모두 구독해도 검출기는 하나만 받는다. 최신 메시지 세 개를 같은 촬영 시각의
+`driving`이 세 입력을 모두 구독해도 검출기는 하나만 받는다. 최신 메시지 세 개를 같은 촬영 시각의
 동기화된 입력으로 간주하지 않는다. 기본 basic_sat은 `/camera`의 640×480 영상만 받는다.
 다른 검출기는 자신의 입력 조건을 검사해야 한다.
+`driving_debug`는 세 입력을 각각 표시하며 알고리즘 선택 토픽을 구독하지 않는다.
+디버깅 결과 창에는 `driving`이 현재 발행하는 영상이 표시된다.
 
 ## 2. 개발 환경과 작업 브랜치 준비
 
@@ -171,7 +190,7 @@ source하지 않는다. Humble에서 개발했다면 PR에 그 사실과 Galacti
 | 중심점·경로·오차 결과 | 좌표계·단위·미검출 의미를 정해 반환 |
 | PID, P 제어, pure pursuit 등 | 조향기의 `compute(result)`로 옮김 |
 | `cmd_vel.publish(...)` | 제거하고 `Twist`를 반환. 공통 노드가 발행 |
-| `imshow`, `waitKey`, 별도 디버깅 publisher | `get_debug_image()`가 JPEG 메시지를 반환하도록 변경 |
+| `imshow`, `waitKey`, 별도 디버깅 publisher | `get_debug_image()`가 JPEG를 반환하고, 화면 표시는 `driving_debug`에 맡김 |
 | 개인 PC의 파일 경로, 모델/보정 파일 | 패키지 리소스 또는 명시적인 배포 경로로 변경 |
 
 예를 들어 기존 `lane_center = find_lane(frame)` 함수는 그대로 재사용할 수 있다.
@@ -342,6 +361,8 @@ JPEG 데이터는 실제로 `.jpg`로 인코딩하고 `format='jpeg'`로 표시�
 입력 header를 복사하여 어떤 입력 프레임인지 알 수 있게 한다. 이전 영상이 남지 않도록
 매 `detect()` 시작 시 디버깅 상태를 지운다. 발행 순서는 검출·조향 성공 및 최신성 검사를
 통과한 뒤이며, 디버깅 생성만 실패하면 경고를 남기고 정상 조향 결과는 유지한다.
+새 검출기도 이 방식으로 반환하면 기존 뷰어에서 바로 볼 수 있다. 같은 디버깅 토픽과
+메시지 타입을 사용하는 한 뷰어에 알고리즘 등록이나 표시 코드를 추가할 필요가 없다.
 
 현재 자동 호출 대상은 검출기 하나다. 조향기가 그린 예상 경로를 별도로 반환하거나
 여러 종류의 영상을 서로 다른 토픽으로 발행하는 기능은 추가 연결이 필요하다.
@@ -543,11 +564,15 @@ Galactic의 검증 콜백에서 아직 확정되지 않은 값을 실행 객체�
 | 등록·연결 | 이름으로 생성되며 실제 검출 결과를 의도한 조향기가 올바르게 해석하는지 |
 | 전환/지연 | 상태 초기화, 이전 작업 폐기, 최신 프레임 처리, timeout 동작 |
 | 디버깅 | JPEG 디코딩, 크기·표시 위치·입력 header, 미검출 화면, 오류 격리 |
+| 뷰어 변경 시 | 네 영상의 창 연결, remap, 손상 입력 후 회복, 영상이 없을 때의 종료와 자원 정리 |
 | 파라미터 추가 시 | 시작 값, 실행 중 변경, 거부된 값이 동작을 바꾸지 않는지 |
 | 설치 | 소스 디렉터리 밖에서도 import·설정/모델 경로가 동작하는지 |
 
 이미 기존 테스트가 확인하는 항목은 활용한다. 새 테스트는 새 로직의 중요한 행동과
 회귀 위험에 집중한다. 실제 검출기의 평가는 대표 영상과 정답/기대 결과를 이용한다.
+현재 `test/test_pipeline.py`는 주행 28개, `test/test_debug_viewer.py`는 뷰어 6개를 검사한다.
+뷰어 검사는 실제 ROS 수신과 디코딩을 확인하면서 GUI 함수를 대체하므로 화면 서버 없이
+실행할 수 있다. **테스트 통과와 실제 데스크톱에서의 창 표시 확인은 별도로 기록한다.**
 
 ### 8.2 예제 어댑터를 검사하는 테스트
 
@@ -691,6 +716,68 @@ bag에 `/camera_raw`만 들어 있다면 해당 토픽을 재생하고 검출기
 현재는 worker를 강제로 종료하지 못한다. 영구 대기·긴 모델 초기화·GIL 점유에 대한
 하드 실시간 보호가 있는 구조는 아니다. 실제 카메라나 실차 검증을 하지 않았다면 PR에
 미실시로 적고, 합성 영상 테스트 통과를 실차 성능 검증으로 표현하지 않는다.
+
+### 8.5 OpenCV 창으로 입력과 디버깅 영상 보기
+
+`driving_debug`는 주행 노드와 별도로 실행하는 로컬 영상 뷰어다.
+카메라 입력과 검출 결과를 각각 띄워 전처리·검출 상태를 확인할 때 사용한다.
+새 실행 파일이므로 8.3절대로 패키지를 다시 빌드하고 setup을 적용한 뒤 실행한다.
+카메라 발행기와 `driving`이 필요한 영상을 발행 중인 상태에서, 로컬 GUI 터미널을 연다.
+발행기와 뷰어의 ROS domain을 맞추고 각각의 터미널에서 setup을 적용한다.
+
+```bash
+source /opt/ros/galactic/setup.bash
+source ~/turtlebot3_ws/install/local_setup.bash
+ros2 pkg executables driving  # driving과 driving_debug 등록 확인
+ros2 run driving driving_debug
+```
+
+| 구독 토픽 / 창 이름 | 표시 내용 |
+| --- | --- |
+| `camera` | 카메라 입력 |
+| `camera_raw` | 다른 카메라 입력 |
+| `camera_raw_16_9` | 다른 카메라 입력 |
+| `driving/debug/roi/compressed` | driving이 발행한 디버깅 JPEG |
+
+수신 콜백은 압축 데이터를 `cv2.imdecode()`로 복원하고 `cv2.imshow()`에 전달한다.
+main은 `rclpy.spin_once(..., timeout_sec=0.03)`와 `cv2.waitKey(1)`을 반복한다.
+따라서 입력이 잠시 없어도 키 입력을 처리하며, 이 대기값이 표시 FPS를 고정하지는 않는다.
+
+네 토픽 모두 `sensor_msgs/msg/CompressedImage`, sensor-data QoS(Best Effort/depth 5)다.
+**정상 영상이 처음 도착한 토픽부터 창을 연다.** `raw`도 이 패키지에서는 압축 영상이며
+`sensor_msgs/msg/Image`를 직접 지원하지 않는다. 각 창은 독립적으로 갱신하므로 같은 촬영
+시각의 입력/결과를 맞춰 보여주는 기능은 없다. 손상된 메시지는 경고 후 건너뛴다.
+수신이 끊기면 마지막 화면이 남으며, 디버깅을 제공하지 않는 검출기는 결과 창이 없을 수 있다.
+
+영상 창에 포커스를 두고 **q 또는 Esc**, 혹은 터미널에서 **Ctrl+C**로 뷰어를 종료한다.
+창의 닫기 버튼은 노드 종료 수단이 아니며 다음 영상이 오면 창이 다시 열릴 수 있다.
+뷰어 종료와 주행 노드 종료는 별개다. 뷰어는 영상을 구독해 표시하기만 한다.
+
+OpenCV HighGUI와 화면을 표시할 데스크톱 세션이 필요하다. GUI 없는 SSH 세션이나
+`opencv-python-headless`만 있는 환경에서는 창을 열 수 없다. 기존 `python3-opencv`와
+`python3-numpy` 의존성을 사용하며 `cv_bridge`는 필요하지 않다.
+
+8.4절의 미리보기 주행 노드와 연결한다면 같은 ROS setup과 domain/localhost 환경을
+적용하고, 주행 노드와 같은 namespace 및 카메라 remap을 사용한다.
+
+```bash
+export ROS_DOMAIN_ID=94
+export ROS_LOCALHOST_ONLY=1
+ros2 run driving driving_debug --ros-args \
+  -r __ns:=/driving_preview \
+  -r camera:=/camera \
+  -r camera_raw:=/camera_raw \
+  -r camera_raw_16_9:=/camera_raw_16_9
+```
+
+이 경우 결과 영상은 `/driving_preview/driving/debug/roi/compressed`에서 받는다.
+일반 실행에서도 토픽 이름이 다르면 예를 들어 `-r camera:=/camera/image/compressed`로
+변경할 수 있다. 창 제목은 remap 전의 위 표 이름을 사용한다. 다른 PC의 발행기를 보려면
+`ROS_LOCALHOST_ONLY=1`을 사용하지 말고 ROS domain과 네트워크 설정을 맞춘다.
+
+실제 GUI에서는 입력 창과 결과 창이 갱신되는지 확인하고, basic 결과에서 ROI와 빨간
+중심점을 확인한다. 입력을 잠시 중단해 마지막 화면이 유지되는지, q/Esc 또는 Ctrl+C로
+창이 정리되는지도 확인한다. basic이 차선을 못 찾은 정상 영상에는 점이 없을 수 있다.
 
 ## 9. 커밋·push·GitHub PR
 
@@ -849,7 +936,11 @@ GitHub에서 fork한 뒤 **fork를 `origin`, 팀 저장소를 `upstream`**으로
 | 이름을 보냈는데 선택이 안 됨 | 등록표 누락, 미구현 이름, 생성 실패, 지원하지 않는 input_topic, 로그 |
 | 선택은 됐는데 조향이 틀리거나 예외가 남 | 검출·조향의 실제 자료형·좌표·단위 불일치. 두 토픽으로 변경 중인 중간 조합인지 확인 |
 | 영상 콜백은 오는데 처리가 안 됨 | 활성 검출기의 input_topic, namespace/remap, 실제 CompressedImage 타입 |
-| debug 토픽은 있는데 화면이 안 나옴 | 활성 검출기에 get_debug_image가 있는지, 유효 결과가 나오는지, 구독 QoS Best Effort |
+| `driving_debug` 실행 파일을 못 찾음 | setup.py 변경 후 재빌드/setup 적용, `ros2 pkg executables driving`에 실행 항목이 있는지 |
+| 뷰어를 실행했는데 창이 하나도 안 열림 | 첫 정상 CompressedImage가 왔는지, ROS domain·namespace/remap, GUI/HighGUI 환경과 디코딩 오류 로그 |
+| 카메라는 보이는데 디버깅 결과 창이 없음 | driving 실행 여부, 활성 검출기의 get_debug_image, 유효 결과 발행, 디버깅 토픽 경로와 Best Effort QoS |
+| 창이 갱신되지 않거나 이전 알고리즘 영상이 남음 | 입력/결과 발행이 중단됐는지. 뷰어는 마지막 정상 화면을 유지하며 영상 중단 알림이나 자동 화면 지우기가 없음 |
+| 창을 닫았는데 다시 열림 | 다음 영상에서 imshow가 창을 다시 열 수 있음. 영상 창의 q/Esc 또는 터미널 Ctrl+C로 노드 종료 |
 | 미검출인데 로봇이 계속 회전함 | basic의 None 극단값 정책인지, 자신의 조향 정책이 무엇인지 |
 | angular.z 부호가 반대임 | ROI/전체 좌표 혼동, 영상 좌우 반전, 오차 부호, rad/s와 다른 단위 혼동 |
 | 결과를 계산했는데 0 Twist만 나옴 | 입력 나이 0.5초 초과, 알고리즘 전환 후 이전 결과, 예외, NaN/Inf |
