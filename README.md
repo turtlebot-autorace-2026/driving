@@ -51,7 +51,7 @@ YOLO 타이머는 저장된 메시지를 꺼내고 저장 자리를 비운다. �
 
 ## 알고리즘별 입력과 결과
 
-기본 선택은 `yolo_lane` 검출 + `pure_pursuit` 조향이다. 노드를 시작하면 별도 선택 명령 없이 `/camera` 입력으로 YOLO 주행 계산을 시작한다.
+기본 선택은 `yolo_lane`이다. 검출기마다 조향기가 고정되어 있으며, 노드를 시작하면 별도 선택 명령 없이 `/camera` 입력으로 YOLO + Pure Pursuit 주행 계산을 시작한다.
 
 | 검출 | 조향 | 전달하는 결과 |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ YOLO 타이머는 저장된 메시지를 꺼내고 저장 자리를 비운다. �
 | `basic_sobel` | `basic_p` | 같은 좌표계의 중심과 좌우 모드 |
 | `yolo_lane` | `pure_pursuit` | `(target, mode)`: 미터 단위 목표점과 검출 상태 |
 
-다른 조합은 0 `Twist`를 발행하고 유효한 선택을 기다린다. 선택 이름이 바뀌면 먼저 0 `Twist`를 발행하고 YOLO 대기 영상, 차선 추적, 조향 평활화 상태를 비운다. 돌아왔을 때 모델은 재사용하며 새 영상을 기다린다. 잘못된 이름·빈 이름은 무시하고, 같은 이름 재전송은 초기화하지 않는다.
+`/driving/detection`으로 검출기 하나를 선택하면 위 표의 조향기를 직접 호출한다. 별도 `/driving/steering` 토픽은 사용하지 않는다. 검출 선택 이름이 바뀌면 먼저 0 `Twist`를 발행하고 YOLO 대기 영상, 차선 추적, 조향 평활화 상태를 비운다. 돌아왔을 때 모델은 재사용하며 새 영상을 기다린다. 잘못된 이름·빈 이름은 무시하고, 같은 이름 재전송은 초기화하지 않는다.
 
 ### basic
 
@@ -91,7 +91,7 @@ Sat은 회색 밝기에 `clip(29.12 * 밝기 + beta, 0, 255)`를 적용하며 HS
 - **정상 영상의 차선 미검출은 원본처럼 0.05m/s 직진, 각속도 0이다.** 정지 정책과 다르다.
 - 디버그는 BEV 위에 마스크, 차선 곡선, 중앙 경로, 목표점, ROI와 속도를 표시한다. 원본 `draw()`를 사용하며 JPEG header는 입력 header를 보존한다.
 
-`/lane_state`는 포함하지 않는다. 유효한 YOLO 조합 선택이 실행 조건이며, `/intersection_state`는 YOLO 조향의 교차로 정책만 바꾼다. 기본 상태는 `false`이고 마지막으로 수신한 값을 다음 상태 메시지까지 유지한다. 알고리즘을 바꿔도 이 값은 유지하며 Sat/Sobel + Basic_P 계산에는 적용하지 않는다. 교차로 상태 변경 자체는 차선 추적·조향 평활화를 초기화하지 않고 다음 YOLO 처리에 반영된다. 미검출은 교차로에서도 `v_lost` 직진 정책을 따른다. 기본 BEV 변환점, 카메라 높이, 차축 위치와 차선 폭의 실물 적합성은 대상 카메라에서 확인해야 한다.
+`/lane_state`는 포함하지 않는다. `yolo_lane` 검출 선택이 실행 조건이며, `/intersection_state`는 YOLO 조향의 교차로 정책만 바꾼다. 기본 상태는 `false`이고 마지막으로 수신한 값을 다음 상태 메시지까지 유지한다. 알고리즘을 바꿔도 이 값은 유지하며 Sat/Sobel + Basic_P 계산에는 적용하지 않는다. 교차로 상태 변경 자체는 차선 추적·조향 평활화를 초기화하지 않고 다음 YOLO 처리에 반영된다. 미검출은 교차로에서도 `v_lost` 직진 정책을 따른다. 기본 BEV 변환점, 카메라 높이, 차축 위치와 차선 폭의 실물 적합성은 대상 카메라에서 확인해야 한다.
 
 ## 빌드와 실행
 
@@ -120,7 +120,7 @@ source "$DRIVING_WS/install/setup.bash"
   -r cmd_vel:=cmd_vel_preview -p yolo_lane.device:=cpu
 ```
 
-위 프로세스는 YOLO + Pure Pursuit 조합으로 시작한다. 선택 토픽을 보내지 않아도 첫 `/camera` 입력부터 처리하고 `/debug1`에 JPEG를 발행한다. 카메라 발행기나 bag 변환기는 별도로 실행해야 하며, 이 패키지는 입력 영상을 만들지 않는다. `/camera_raw_16_9`만 재생하면 `/camera`를 사용하는 계산은 시작되지 않는다. basic만 사용할 때는 아래의 검출·조향 선택 명령을 모두 적용한다. YOLO 의존성이 없는 환경에서는 카메라 발행 전에 basic 조합을 선택한다.
+위 프로세스는 YOLO + Pure Pursuit 조합으로 시작한다. 선택 토픽을 보내지 않아도 첫 `/camera` 입력부터 처리하고 `/debug1`에 JPEG를 발행한다. 카메라 발행기나 bag 변환기는 별도로 실행해야 하며, 이 패키지는 입력 영상을 만들지 않는다. `/camera_raw_16_9`만 재생하면 `/camera`를 사용하는 계산은 시작되지 않는다. basic만 사용할 때는 아래의 검출 선택 명령 하나를 적용한다. YOLO 의존성이 없는 환경에서는 카메라 발행 전에 basic 조합을 선택한다.
 
 Jetson Orin Nano / JetPack 5에서는 해당 JetPack·Python에 맞는 NVIDIA PyTorch/torchvision을 별도로 준비한다. VM의 venv·wheel을 그대로 복사하지 않으며, 의존성 설치가 해당 torch를 일반 CPU 패키지로 교체하지 않게 관리한다. 실제 CUDA 추론은 대상 장치에서 검증해야 한다.
 
@@ -165,7 +165,6 @@ ros2 run driving driving_debug --ros-args -r debug1:=/another_debug/compressed
 | `/camera` | 구독 / `sensor_msgs/msg/CompressedImage` | 모든 현재 검출기의 입력 |
 | `/camera_raw`, `/camera_raw_16_9` | 구독 / `sensor_msgs/msg/CompressedImage` | 마지막 메시지 저장만 수행 |
 | `/driving/detection` | 구독 / `std_msgs/msg/String` | `basic_sat`, `basic_sobel`, `yolo_lane` |
-| `/driving/steering` | 구독 / `std_msgs/msg/String` | `basic_p`, `pure_pursuit` |
 | `/intersection_state` | 구독 / `std_msgs/msg/Bool` | YOLO 교차로 모드: `true` 진입, `false` 해제 |
 | `/cmd_vel` | 발행 / `geometry_msgs/msg/Twist` | 선속도와 각속도 |
 | `/debug1` | 발행 / `sensor_msgs/msg/CompressedImage` | 선택한 알고리즘의 JPEG |
@@ -174,16 +173,14 @@ ros2 run driving driving_debug --ros-args -r debug1:=/another_debug/compressed
 영상 구독은 `qos_profile_sensor_data`, 선택·교차로 상태 구독과 발행은 depth 10 기본 QoS다. 이름에 raw가 있어도 현재 메시지 타입은 `CompressedImage`다.
 
 ```bash
-# 다른 조합에서 기본 YOLO 조합으로 복귀. 시작 시에는 이 명령이 필요 없다.
+# YOLO + Pure Pursuit 선택. 시작 시에는 이 명령이 필요 없다.
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: yolo_lane}"
-ros2 topic pub --once /driving/steering std_msgs/msg/String "{data: pure_pursuit}"
 # YOLO 교차로 모드 진입 / 해제 (각각 필요한 시점에 실행)
 ros2 topic pub --once /intersection_state std_msgs/msg/Bool "{data: true}"
 ros2 topic pub --once /intersection_state std_msgs/msg/Bool "{data: false}"
-# basic 조합으로 전환. 두 명령 사이의 미지원 조합에서는 정지한다.
+# Sat + Basic_P 선택
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sat}"
-ros2 topic pub --once /driving/steering std_msgs/msg/String "{data: basic_p}"
-# basic_p와 함께 Sobel 사용
+# Sobel + Basic_P 선택
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sobel}"
 ```
 
@@ -238,7 +235,8 @@ Basic_P의 `normal_angular_divisor` 등은 기존 소스 상수다. 이번 이�
 - 패키지 단독 colcon 빌드, 모델 share 설치, Python 3.8 문법 검사.
 - 원본 BEV/LanePath/PurePursuit 계산 정의 8개의 AST 동일성. 독립 12사례와 연속 12사례에서 원본 일반 차선 계산과 속도·평활화 결과 일치(허용 오차 1e-12), 디버그 픽셀 일치.
 - 교차로 복원 후 합성 마스크 32사례에서 원본 일반·교차로 속도/조향 계산과 일치(허용 오차 1e-12), 24사례의 디버그 픽셀 일치. 실제 DDS의 Bool 상태 전환·파라미터 서비스 변경·연속 7사례 계산·미검출·한쪽 차선·basic 복귀·잘못된 속도 설정 시 정지를 확인했다. 이 검사는 모델 추론을 합성 마스크로 대체했으며 Galactic·실차 검증은 아니다.
-- 실제 DDS에서 선택 전환·미지원 조합 정지·재선택 초기화·모델 재사용·파라미터 반영·JPEG/header·입력 및 추론 오류·기존 basic 좌우 미검출 동작 확인. 추론을 빠른 대체 함수로 바꾼 타이머 검사는 약 15Hz였다.
+- 실제 DDS에서 선택 전환·재선택 초기화·모델 재사용·파라미터 반영·JPEG/header·입력 및 추론 오류·기존 basic 좌우 미검출 동작 확인. 추론을 빠른 대체 함수로 바꾼 타이머 검사는 약 15Hz였다.
+- 검출별 조향기를 고정한 뒤 `/driving/detection` 하나로 YOLO↔Sat↔Sobel 전환을 확인했다. 전환 시 정지/대기 영상 폐기/추적 초기화, 모델 재사용, 잘못된 이름·동일 이름 처리와 교차로 상태 유지도 확인했다. 실제 DDS를 사용하고 모델 추론은 합성 마스크로 대체했으며 검출·조향 계산 파일은 변경하지 않았다.
 - GUI 제거 후 화면 환경 변수 없이 Sat/Sobel의 320×120 JPEG와 YOLO의 640×480 JPEG 수신을 확인했다. 이 확인에서 YOLO 표시본은 준비한 검출 상태로 생성했으며 모델 추론은 재실행하지 않았다. YOLO 입력 header와 기존 발행 활성화 설정도 유지된다.
 - `driving_debug` 추가 후 실제 DDS에서 다섯 영상 토픽의 수신·JPEG 디코딩·개별 갱신·손상 입력 처리·namespace/remap을 확인했다. HighGUI 호출을 대체해 창 생성과 q/Esc 종료, Ctrl+C 및 정상 종료의 창 정리를 검사했다. 현재 실행 환경에는 디스플레이 연결이 없어 실제 창 표시는 미검증이다. 노드 import에 PyTorch/Ultralytics가 필요하지 않음도 확인했다.
 - `normal` bag의 원본 영상을 camera_ros 방식으로 보정한 5개 표본에서 실제 CPU YOLO 추론과 ROS 발행 확인. 첫 표본은 원본 추론 함수와 마스크가 같았고, 5개 모두 같은 검출 결과에 대한 원본 속도 명령과 일치했다.

@@ -17,12 +17,12 @@
 
 ## 현재 YOLO 연결 기준
 
-- 지원 조합은 Sat/Basic_P, Sobel/Basic_P, YOLO/LanePurePursuit다. 기본 선택은 YOLO/LanePurePursuit이며 별도 선택 신호 없이 첫 영상부터 처리한다. 지원하지 않는 조합은 0 Twist로 처리하며 명시적 분기를 유지한다.
+- 검출기별 조향기는 Sat/Basic_P, Sobel/Basic_P, YOLO/LanePurePursuit로 고정한다. `/driving/detection` 하나로 검출과 연결된 조향을 함께 선택하며 `/driving/steering` 구독·상태·조합 검사는 없다. 기본 선택은 YOLO이며 별도 선택 신호 없이 첫 영상부터 처리한다. 새 알고리즘도 해당 분기에서 조향기를 직접 호출한다.
 - YOLO 입력은 보정된 `/camera` 압축영상이다. 원본의 640×480 BEV, `LanePath.target()` → `PurePursuit.compute_to()` 순서, 모델 클래스 0 white/1 yellow를 보존한다. basic의 ROI나 픽셀 중심으로 대체하지 않는다.
 - 검출 출력 `(target, mode)`의 target은 차축 기준 전방 x/좌측 y의 미터 좌표 또는 None이다. mode는 both/yellow_only/white_only/lost다. 정상 미검출은 기본 0.05m/s 직진, 한쪽 검출은 속도 0.8배이며 입력/추론 오류의 정지와 구분한다.
 - `/lane_state`는 현재 제외 범위다. `/intersection_state` Bool은 노드가 받아 YOLO 조향에만 전달한다. 교차로에서는 `pure_pursuit.v_max_intersection`(기본 0.12)과 원본 내부 곡률 배율 0.7을 사용한다. 원본처럼 교차로 전환 자체는 추적·평활화를 초기화하지 않고, 미검출은 `v_lost`, 한쪽 차선은 `v_single` 정책을 유지한다. 기본 교차로 상태는 False이며 알고리즘 변경에도 마지막 수신값을 유지한다. 내부 검출 mode와 외부 enable을 혼동하지 않는다. 기존 Basic_P에 사용자가 남긴 교차로 주석은 별개로 보존한다.
 - YOLO만 최신 수신 메시지 + 기본 15Hz 타이머로 처리한다. 같은 메시지 재처리와 카메라 콜백의 중복 추론을 피한다. 타이머는 단일 executor 안에서 동기 실행되므로 실제 15fps나 비차단 수신을 보장하지 않는다.
-- 모델은 첫 사용에 한 번 로드하고 재사용한다. 선택 변경은 정지 발행 후 대기 영상·추적·조향 평활화를 초기화한다. 새 조향기를 추가할 때 camera_callback과 selection_changed의 지원 조합 조건도 갱신한다.
+- 모델은 첫 사용에 한 번 로드하고 재사용한다. 검출 선택 변경은 정지 발행 후 대기 영상·추적·조향 평활화를 초기화한다. 새 조향기를 추가할 때 해당 검출 분기의 호출부와 필요한 상태 초기화를 연결한다.
 - 원본 설정은 노드의 ROS 파라미터로 유지한다. 모델 경로·장치·주기는 시작 전용 read_only이고 나머지 튜닝값은 프레임마다 읽는다. 창 표시 설정은 제거했다. 유효 범위 검사와 실제 적용 시점을 문서에 적는다.
 - 주행 노드와 알고리즘은 디버그 영상 생성·JPEG 토픽 발행만 담당한다. GUI 창·키 입력 코드는 별도 `driving_debug` 노드에만 둔다. 뷰어는 `IMAGE_TOPICS`의 camera/camera_raw/camera_raw_16_9/debug1/debug2를 구독하며 속도·알고리즘 선택을 발행하지 않는다. 새 영상 토픽이 생기면 목록과 문서를 함께 갱신한다.
 - YOLO 디버그는 원본 draw와 입력 header를 보존한다. 모델 출처·해시는 models/README.md, 설치 경로는 setup.py의 share data_files를 확인한다. 기본 YOLO 주행에는 추론 의존성이 필요하다. Ultralytics는 첫 YOLO 처리 때 import하며 첫 영상 전에 basic으로 전환한 경우에는 로드하지 않는다.

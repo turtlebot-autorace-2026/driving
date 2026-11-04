@@ -22,7 +22,6 @@ from driving.steering.pure_pursuit import LanePurePursuit
 
 
 
-Steering = Literal['basic_p', 'pure_pursuit']
 Detection = Literal['basic_sobel', 'basic_sat', 'yolo_lane']
 
 
@@ -35,7 +34,6 @@ class DrivingNode(Node):
         self.camera_raw_16_9_msg: Optional[CompressedImage] = None
 
         self.lane_detection_algorithm: Detection = 'yolo_lane'
-        self.steering_algorithm: Steering = 'pure_pursuit'
         self.is_intersection = False
 
         # 계산 객체를 재사용한다. 무거운 YOLO 모델은 첫 처리 때 한 번 읽는다.
@@ -47,7 +45,7 @@ class DrivingNode(Node):
         self.yolo_msg: Optional[CompressedImage] = None
         self.last_yolo_processing_seconds = 0.0
 
-        # controller
+        # 검출별 조향기: Sat/Sobel → Basic_P, YOLO → LanePurePursuit
         self.basic_p = Basic_P()
         self.pure_pursuit = LanePurePursuit()
 
@@ -78,12 +76,6 @@ class DrivingNode(Node):
 
 
         ## 알고리즘 선택
-        self.steering_selection_subscription = self.create_subscription(
-            String,
-            'driving/steering',
-            self.steering_selection_callback,
-            10,
-        )
         self.lane_detection_selection_subscription = self.create_subscription(
             String,
             'driving/detection',
@@ -143,15 +135,7 @@ class DrivingNode(Node):
 
         # YOLO는 수신과 처리를 분리한다. 타이머가 소비하기 전에는 최신 수신본으로 덮어쓴다.
         if self.lane_detection_algorithm == 'yolo_lane':
-            if self.steering_algorithm == 'pure_pursuit':
-                self.yolo_msg = msg
-            else:
-                self.cmd_vel_pub.publish(Twist())
-            return
-
-        # basic의 픽셀 중심을 미터 목표점용 조향기에 전달하지 않는다.
-        if self.steering_algorithm != 'basic_p':
-            self.cmd_vel_pub.publish(Twist())
+            self.yolo_msg = msg
             return
 
         if self.lane_detection_algorithm == 'basic_sat':
@@ -191,8 +175,7 @@ class DrivingNode(Node):
 
     def process_yolo(self):
         """기본 15Hz. 새 영상 한 장을 검출 → 조향 → 발행하고 같은 영상을 재처리하지 않는다."""
-        if (self.lane_detection_algorithm != 'yolo_lane'
-                or self.steering_algorithm != 'pure_pursuit'):
+        if self.lane_detection_algorithm != 'yolo_lane':
             return
         msg, self.yolo_msg = self.yolo_msg, None
         if msg is None:
@@ -240,22 +223,6 @@ class DrivingNode(Node):
         self.get_logger().info(state + ' Intersection Mode')
 
     # 선택은 이름을 바꾼 뒤, 다음 새 영상부터 해당 분기를 실행한다.
-    def steering_selection_callback(self, msg: String):
-        algorithm = msg.data.strip()
-        allowed = get_args(Steering)
-
-        if not algorithm:
-            self.get_logger().warning('Ignoring empty steering algorithm name.')
-            return
-        if algorithm not in allowed:
-            self.get_logger().warning(f'not allowed {algorithm}. allowed: {allowed}')
-            return
-        if algorithm == self.steering_algorithm:
-            return
-        self.steering_algorithm = cast(Steering, algorithm)
-        self.selection_changed()
-        self.get_logger().info('Steering selection: ' + algorithm)
-
     def lane_detection_selection_callback(self, msg: String):
         algorithm = msg.data.strip()
         allowed = get_args(Detection)
@@ -284,9 +251,6 @@ class DrivingNode(Node):
     def selection_changed(self):
         self.cmd_vel_pub.publish(Twist())
         self.reset_yolo()
-        if ((self.lane_detection_algorithm == 'yolo_lane' and self.steering_algorithm != 'pure_pursuit')
-                or (self.lane_detection_algorithm != 'yolo_lane' and self.steering_algorithm != 'basic_p')):
-            self.get_logger().warning('Unsupported detection/steering pair; waiting with zero velocity.')
 
     def publish_debug_yolo(self, camera_msg):
         if not self.get_parameter('yolo_lane.publish_debug').value:

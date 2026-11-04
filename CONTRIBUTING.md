@@ -111,7 +111,7 @@ class Basic_Threshold:
 from driving.detection.basic_threshold import Basic_Threshold
 ```
 
-기존 `Detection` 선언을 다음처럼 바꾼다. 기본 선택값 `self.lane_detection_algorithm = 'yolo_lane'`, `self.steering_algorithm = 'pure_pursuit'`는 유지하고 새 알고리즘은 선택 토픽으로 전환한다.
+기존 `Detection` 선언을 다음처럼 바꾼다. 기본 선택값 `self.lane_detection_algorithm = 'yolo_lane'`는 유지하고 새 알고리즘은 `/driving/detection`으로 선택한다. 조향기는 아래 검출 분기에서 직접 호출하므로 별도 선택 이름을 등록하지 않는다.
 
 ```python
 Detection = Literal['basic_sobel', 'basic_sat', 'yolo_lane', 'basic_threshold']
@@ -182,13 +182,12 @@ README의 빌드·실행 절차를 따른 뒤, ROS 환경을 읽은 다른 터�
 
 ```bash
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_threshold}"
-ros2 topic pub --once /driving/steering std_msgs/msg/String "{data: basic_p}"
 ros2 param set /driving basic_threshold.threshold 190
 ros2 param get /driving basic_threshold.threshold
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sat}"
 ```
 
-시작 시 조향은 `pure_pursuit`이므로 위 basic 예제에서는 검출과 조향을 모두 바꿔야 한다. 두 명령 사이에는 미지원 조합으로 정지한다. 노드가 새 분기에 들어가고 새 검출기가 만든 중심으로 조향하는지 확인한다. 선택 로그만 보고 연결 완료라고 판단하지 않는다. 같은 `detection` Python 패키지 안에 파일을 추가하면 현재 `setup.py`의 `find_packages`가 포함하므로 실행 엔트리 포인트를 더 만들 필요는 없다. 외부 라이브러리를 새로 쓰는 경우에는 의존성과 Galactic 설치 가능 여부도 확인한다.
+위 예제는 `basic_threshold`를 선택하면 해당 분기에서 `Basic_P`를 직접 호출한다. 노드가 새 분기에 들어가고 새 검출기가 만든 중심으로 조향하는지 확인한다. 선택 로그만 보고 연결 완료라고 판단하지 않는다. 같은 `detection` Python 패키지 안에 파일을 추가하면 현재 `setup.py`의 `find_packages`가 포함하므로 실행 엔트리 포인트를 더 만들 필요는 없다. 외부 라이브러리를 새로 쓰는 경우에는 의존성과 Galactic 설치 가능 여부도 확인한다.
 
 ## 3. 기존 파라미터 전달 방식을 따른다
 
@@ -211,26 +210,22 @@ twist = self.basic_p.makeTwist(center, lane_mode)
 
 ## 4. 조향기를 추가할 때
 
-현재 `Steering`은 `basic_p`, `pure_pursuit`를 허용한다. Sat/Sobel은 Basic_P, YOLO는 LanePurePursuit에 연결한다. 새 조향기를 추가하려면 다음을 모두 연결한다.
+현재 Sat/Sobel은 Basic_P, YOLO는 LanePurePursuit를 항상 호출한다. 조향 선택용 `Steering` 타입이나 `/driving/steering` 구독은 없다. 새 조향기는 사용할 검출기의 분기에 직접 연결한다.
 
 1. `driving/steering/`에 계산 클래스를 만든다. 입력의 좌표·단위·미검출 의미와 반환하는 `Twist`의 의미를 적는다.
 2. 노드에서 import하고 `__init__`에서 객체를 한 번 만든다.
-3. `Steering`의 `Literal`에 선택 이름을 추가한다.
-4. 해당 검출 분기의 조향 계산 위치에서 `self.steering_algorithm`을 확인하고 선택된 조향기를 호출한다. `camera_callback`의 basic 조향 제한과 `selection_changed`의 지원 조합 조건도 함께 확장한다. 가드가 새 조합을 먼저 차단하지 않는지 확인한다.
-5. 필요한 파라미터, 검출기와 공유하는 모드, 입력 결과 형식을 연결한다.
+3. 해당 검출 분기의 조향 호출을 새 객체의 메서드로 연결한다. Sat/Sobel 같은 즉시 처리는 `camera_callback`, YOLO는 `process_yolo`에 호출이 있다.
+4. 필요한 파라미터, 검출기와 공유하는 모드, 입력 결과 형식을 연결한다. 이전 프레임 상태를 보관하는 조향기는 검출 선택 변경 시 초기화도 연결한다.
 
-예를 들어 `My_Controller`와 `self.my_controller`를 구현했고 같은 ROI 중심을 입력받는다면, 각 검출 분기 안의 기존 조향 호출을 다음 형태로 확장할 수 있다. `my_controller`는 설명용 이름이며 현재 설치된 조향기가 아니다.
+예를 들어 `My_Controller`와 `self.my_controller`를 구현했고 같은 ROI 중심을 입력받는다면, 사용할 검출 분기 안의 조향 호출을 다음처럼 작성한다. `my_controller`는 설명용 이름이며 현재 설치된 조향기가 아니다.
 
 ```python
-if self.steering_algorithm == 'basic_p':
-    twist = self.basic_p.makeTwist(center, lane_mode)
-elif self.steering_algorithm == 'my_controller':
-    twist = self.my_controller.makeTwist(center, lane_mode=lane_mode)
+twist = self.my_controller.makeTwist(center, lane_mode=lane_mode)
 ```
 
-`lane_mode`가 필요 없는 새 조향기는 그 인자를 생략하면 된다. 이 예제의 메서드 시그니처를 모든 조향기의 공통 인터페이스로 강제하지 않는다. 선택 이름만 추가하고 호출부를 그대로 두면 새 이름을 선택해도 기존 `Basic_P`가 계속 실행된다.
+`lane_mode`가 필요 없는 새 조향기는 그 인자를 생략하면 된다. 이 예제의 메서드 시그니처를 모든 조향기의 공통 인터페이스로 강제하지 않는다. 객체를 추가한 뒤 해당 검출 분기에서 실제로 호출하는지 확인한다.
 
-일부 검출 결과에만 적용할 수 있는 조향기라면 지원하는 조합과 미지원 선택의 처리 방식을 명시한다. 잘못된 결과를 억지로 넘기거나 마지막 속도 명령만 남긴 채 조용히 반환하지 않도록 해당 분기에서 처리한다. 이를 위해 범용 호환성 등록 시스템을 먼저 만들 필요는 없다.
+검출 결과의 좌표·단위·미검출 의미를 해석할 수 있는 조향기를 연결한다. 검출기 하나에 여러 조향기를 실행 중 바꿔야 하는 요구가 생기면 그때 선택 방식을 설계한다. 현재는 각 분기의 직접 호출을 유지하며 범용 호환성 등록 시스템을 추가하지 않는다.
 
 ### 실제 추가 사례: YOLO + Pure Pursuit
 
