@@ -7,11 +7,13 @@ import numpy as np
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 
 from driving.detection.basic_sat import Basic_Sat
 from driving.detection.basic_sobel import Basic_Sobel
 from driving.steering.basic_p import Basic_P
+
+
 
 Steering = Literal['basic_p']
 Detection = Literal['basic_sobel', 'basic_sat']
@@ -38,6 +40,8 @@ class DrivingNode(Node):
         self.basic_p = Basic_P()
 
         self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+        self.debug_pub1 = self.create_publisher(CompressedImage, 'debug1', 10)
+        self.debug_pub2 = self.create_publisher(CompressedImage, 'debug2', 10)
 
 
         ## 카메라 소스 입력
@@ -75,6 +79,10 @@ class DrivingNode(Node):
             10,
         )
 
+        ## 파라미터
+        self.declare_parameter('basic_sat.beta', -5080.1)   # for basic_sat
+        self.declare_parameter('basic.lane_mode', True)   # for basic_sat & sobel
+
 
 
 ## ==== CALL_BACK ====
@@ -85,7 +93,10 @@ class DrivingNode(Node):
         if self.lane_detection_algorithm == 'basic_sat':
             try:
                 # 영상 한 장을 검출 → 조향 순서로 처리한다.
-                center = self.basic_sat.detectCenterSaturation(msg)
+                beta = self.get_parameter('basic_sat.beta').value
+                lane_mode = self.get_parameter('basic.lane_mode').value
+                # self.get_logger().info(f'beta: {beta}')
+                center = self.basic_sat.detectCenterSaturation(msg, beta, lane_mode)
                 # 정상 영상의 미검출(None)은 basic_p가 기존 극단값으로 처리한다.
                 twist = self.basic_p.makeTwist(center)
             except (ValueError, cv2.error) as error:
@@ -99,7 +110,8 @@ class DrivingNode(Node):
 
         if self.lane_detection_algorithm == 'basic_sobel':
             try:
-                center = self.basic_sobel.detectCenterSobel(msg)
+                lane_mode = self.get_parameter('basic.lane_mode').value
+                center = self.basic_sobel.detectCenterSobel(msg, lane_mode)
                 twist = self.basic_p.makeTwist(center)
             except (ValueError, cv2.error) as error:
                 self.get_logger().warning(f'Camera processing failed: {error}')
@@ -152,18 +164,32 @@ class DrivingNode(Node):
         img = self.basic_sat.debug()
         if img is None:
             return
+        stamp = self.get_clock().now().to_msg()
+        self.publish_compressed(self.debug_pub1, img, stamp)
         cv2.imshow("test", img)
         cv2.waitKey(1)
-        
 
     def publish_debug_basic_sobel(self):
         img = self.basic_sobel.debug()
         if img is None:
             return
+        stamp = self.get_clock().now().to_msg()
+        self.publish_compressed(self.debug_pub1, img, stamp)
         cv2.imshow("test", img)
         cv2.waitKey(1)
 
 
+    def publish_compressed(self, publisher, frame, stamp):
+        """Publish a JPEG frame with the timestamp shared by all three views."""
+        ret, buffer = cv2.imencode('.jpg', frame)
+        if not ret:
+            self.get_logger().warn(f'Failed to encode frame for {publisher.topic_name}.')
+            return
+        msg = CompressedImage()
+        msg.header.stamp = stamp
+        msg.format = 'jpeg'
+        msg.data = buffer.tobytes()
+        publisher.publish(msg)
 
 
 

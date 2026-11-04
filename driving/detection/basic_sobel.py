@@ -7,8 +7,8 @@ class Basic_Sobel:
     def __init__(self):
         self.lane_mode=True
 
-    def changeLaneMode(self):
-        self.lane_mode = not self.lane_mode
+    # def changeLaneMode(self):
+    #     self.lane_mode = not self.lane_mode
 
     def __perspectiveTransformation(self, src, src_ptr: Optional[np.ndarray]=None, dst_ptr: Optional[np.ndarray]=None) -> np.ndarray:
     
@@ -40,7 +40,7 @@ class Basic_Sobel:
                 sums += int(m['m10']/m['m00'])
                 count += 1
 
-        if self.__many_white(src) > 0.2:    # 흰색 과검출시 검출 실패로 간주
+        if self.__many_white(src) > 0.1:    # 흰색 과검출시 검출 실패로 간주
             count = 0
 
         if count == 0:     # center 검출 실패
@@ -73,7 +73,7 @@ class Basic_Sobel:
         return np.sum(src==255)/(src.shape[0]*src.shape[1])
 
 
-    def detectCenterSobel(self, camera_msg: Optional[CompressedImage]):
+    def detectCenterSobel(self, camera_msg: Optional[CompressedImage], lane_mode=True):
         # 입력 오류는 예외로 알리고, 정상 영상에서의 차선 미검출만 None으로 반환한다.
         if camera_msg is None or not camera_msg.data:
             raise ValueError('Camera image is missing or empty.')
@@ -85,6 +85,8 @@ class Basic_Sobel:
             raise ValueError('basic_sat requires a 640x480 BGR image from camera.')
         
         src = self.__perspectiveTransformation(src_origin)
+
+        self.lane_mode = lane_mode
 
         if self.lane_mode:
             src = src[:, 0:320]

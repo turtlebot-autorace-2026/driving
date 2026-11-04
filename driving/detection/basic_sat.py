@@ -7,8 +7,8 @@ class Basic_Sat:
     def __init__(self):
         self.lane_mode=True
 
-    def changeLaneMode(self):
-        self.lane_mode = not self.lane_mode
+    # def changeLaneMode(self):
+    #     self.lane_mode = not self.lane_mode
 
     def __perspectiveTransformation(self, src, src_ptr: Optional[np.ndarray]=None, dst_ptr: Optional[np.ndarray]=None) -> np.ndarray:
 
@@ -52,7 +52,7 @@ class Basic_Sat:
             else: return 320
         return sums // count            # center 반환
 
-    def detectCenterSaturation(self, camera_msg: Optional[CompressedImage]):
+    def detectCenterSaturation(self, camera_msg: Optional[CompressedImage], beta=-5080.1, lane_mode=True):
 
         # 입력 오류는 예외로 알리고, 정상 영상에서의 차선 미검출만 None으로 반환한다.
         if camera_msg is None or not camera_msg.data:
@@ -65,6 +65,8 @@ class Basic_Sat:
             raise ValueError('basic_sat requires a 640x480 BGR image from camera.')
         src = self.__perspectiveTransformation(src_origin)
 
+        self.lane_mode = lane_mode
+
         if self.lane_mode:
             src = src[:, 0:320]
         else:
@@ -72,7 +74,7 @@ class Basic_Sat:
         
         src = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
         src = cv2.GaussianBlur(src, (15, 15), 0)
-        src = self.__linear_saturate(src, 29.12, -5080.1)
+        src = self.__linear_saturate(src, 29.12, beta)
         _, src = cv2.threshold(src, 160, 255, cv2.THRESH_BINARY)
         src = self.__morphology(src)
 
