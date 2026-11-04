@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from typing import Optional, Tuple
+from typing import Optional
 from sensor_msgs.msg import CompressedImage
 
 class Basic_Sat:
@@ -49,7 +49,7 @@ class Basic_Sat:
 
         if count == 0:     # center 검출 실패
             if self.lane_mode: return 0
-            else: return 640
+            else: return 320
         return sums // count            # center 반환
 
     def detectCenterSaturation(self, camera_msg: Optional[CompressedImage]):
