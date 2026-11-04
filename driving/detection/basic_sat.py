@@ -47,13 +47,22 @@ class Basic_Sat:
                 sums += int(m['m10']/m['m00'])
                 count += 1
 
-        if count == 0: return None     # center 검출 실패
+        if count == 0:     # center 검출 실패
+            if self.lane_mode: return 0
+            else: return 640
         return sums // count            # center 반환
 
-    def detectCenterSaturation(self, camera_msg: Optional[CompressedImage]) -> Optional[int]:
+    def detectCenterSaturation(self, camera_msg: Optional[CompressedImage]):
 
+        # 입력 오류는 예외로 알리고, 정상 영상에서의 차선 미검출만 None으로 반환한다.
+        if camera_msg is None or not camera_msg.data:
+            raise ValueError('Camera image is missing or empty.')
         np_arr = np.frombuffer(camera_msg.data, np.uint8)
         src_origin = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if src_origin is None:
+            raise ValueError('Could not decode the compressed camera image.')
+        if src_origin.shape != (480, 640, 3):
+            raise ValueError('basic_sat requires a 640x480 BGR image from camera.')
         src = self.__perspectiveTransformation(src_origin)
 
         if self.lane_mode:
@@ -68,6 +77,13 @@ class Basic_Sat:
         src = self.__morphology(src)
 
 
-        center = self.__findMoment(src)  # 검출 실패시 None 반환
+        self.center = self.__findMoment(src)
+        self.debug_image = src
 
-        return center      # @src: binary image of detected lane, sums: x value of moment
+        return self.center      # @src: binary image of detected lane, sums: x value of moment
+
+    def debug(self):
+        img = cv2.cvtColor(self.debug_image, cv2.COLOR_GRAY2BGR)
+        if self.center is not None:
+            cv2.circle(img, center=(self.center, 60), radius=5, color=(0, 0, 255), thickness=-1)
+        return img

@@ -49,7 +49,7 @@ class Basic_P:
         if self.lane_mode == False:
             config = self.RIGHT_LANE_CONFIG
 
-        if lane_center == None: lane_center = config.roi_start_x
+        # if lane_center == None: lane_center = config.roi_start_x
 
         normalized_error = (config.target_x - lane_center) / config.error_scale
         normalized_error = np.clip(normalized_error, -1.65, 1.5)

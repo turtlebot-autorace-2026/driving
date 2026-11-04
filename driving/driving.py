@@ -5,8 +5,12 @@ from rclpy.node import Node
 import cv2
 import numpy as np
 from rclpy.qos import qos_profile_sensor_data
+from geometry_msgs.msg import Twist
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
+
+from driving.detection.basic_sat import Basic_Sat
+from driving.steering.basic_p import Basic_P
 
 Steering = Literal['basic_p', 'pure_pursuit']
 Detection = Literal['basic_sobel', 'basic_sat', 'yolo']
@@ -23,6 +27,13 @@ class DrivingNode(Node):
         self.steering_algorithm: Steering = 'basic_p'
         self.lane_detection_algorithm: Detection = 'basic_sat'
 
+        # 1단계에서는 basic 조합을 고정해서 사용한다. 객체는 시작할 때 한 번 만든다.
+        self.detector = Basic_Sat()
+        self.controller = Basic_P()
+        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+
+
+        ## 카메라 소스 입력
         self.camera_subscription = self.create_subscription(
             CompressedImage,
             'camera',
@@ -41,6 +52,9 @@ class DrivingNode(Node):
             self.camera_raw_16_9_callback,
             qos_profile_sensor_data,
         )
+
+
+        ## 알고리즘 선택
         self.steering_selection_subscription = self.create_subscription(
             String,
             'driving/steering',
@@ -54,8 +68,25 @@ class DrivingNode(Node):
             10,
         )
 
+
+
+## ==== CALL_BACK ====
+
     def camera_callback(self, msg: CompressedImage):
         self.camera_msg = msg
+        try:
+            # 영상 한 장을 검출 → 조향 순서로 처리한다.
+            center = self.detector.detectCenterSaturation(msg)
+            # 정상 영상의 미검출(None)은 basic_p가 기존 극단값으로 처리한다.
+            twist = self.controller.makeTwist(center)
+        except (ValueError, cv2.error) as error:
+            # 손상되거나 규격이 맞지 않는 영상은 차선 미검출과 구분한다.
+            self.get_logger().warning(f'Camera processing failed: {error}')
+            self.cmd_vel_pub.publish(Twist())
+            return
+
+        self.cmd_vel_pub.publish(twist)
+        self.publish_debug_basic_sat()
 
     def camera_raw_callback(self, msg: CompressedImage):
         self.camera_raw_msg = msg
@@ -63,6 +94,7 @@ class DrivingNode(Node):
     def camera_raw_16_9_callback(self, msg: CompressedImage):
         self.camera_raw_16_9_msg = msg
 
+    # 선택 토픽은 아직 이름만 저장한다. 실제 객체 교체는 다음 단계에서 연결한다.
     def steering_selection_callback(self, msg: String):
         algorithm = msg.data.strip()
         allowed = get_args(Steering)
@@ -92,6 +124,22 @@ class DrivingNode(Node):
             return
         self.lane_detection_algorithm = cast(Detection, algorithm)
         self.get_logger().info('Lane detection selection: ' + algorithm)
+
+
+## ==== 개별 클래스 제어 ===
+
+    def publish_debug_basic_sat(self):
+        img = self.detector.debug()
+        if img is None:
+            return
+        cv2.imshow("test", img)
+        cv2.waitKey(1)
+        
+
+
+
+
+
 
 
 def main(args=None):
