@@ -13,8 +13,8 @@ from driving.detection.basic_sat import Basic_Sat
 from driving.detection.basic_sobel import Basic_Sobel
 from driving.steering.basic_p import Basic_P
 
-Steering = Literal['basic_p', 'pure_pursuit']
-Detection = Literal['basic_sobel']
+Steering = Literal['basic_p']
+Detection = Literal['basic_sobel', 'basic_sat']
 
 
 class DrivingNode(Node):
