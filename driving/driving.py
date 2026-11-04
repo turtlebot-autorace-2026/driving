@@ -34,6 +34,7 @@ class DrivingNode(Node):
         self.camera_raw_16_9_msg: Optional[CompressedImage] = None
 
         self.lane_detection_algorithm: Detection = 'yolo_lane'
+        self.lane_enabled = False  # /lane_state=True를 받을 때까지 주행을 기다린다.
         self.is_intersection = False
 
         # 계산 객체를 재사용한다. 무거운 YOLO 모델은 첫 처리 때 한 번 읽는다.
@@ -75,7 +76,13 @@ class DrivingNode(Node):
         )
 
 
-        ## 알고리즘 선택
+        ## 주행 허용과 알고리즘 선택
+        self.lane_state_subscription = self.create_subscription(
+            Bool,
+            'lane_state',
+            self.lane_state_callback,
+            10,
+        )
         self.lane_detection_selection_subscription = self.create_subscription(
             String,
             'driving/detection',
@@ -132,6 +139,9 @@ class DrivingNode(Node):
 
     def camera_callback(self, msg: CompressedImage):
         self.camera_msg = msg
+        # 대기 중에는 basic 계산도 YOLO 처리용 영상 저장도 하지 않는다.
+        if not self.lane_enabled:
+            return
 
         # YOLO는 수신과 처리를 분리한다. 타이머가 소비하기 전에는 최신 수신본으로 덮어쓴다.
         if self.lane_detection_algorithm == 'yolo_lane':
@@ -175,7 +185,7 @@ class DrivingNode(Node):
 
     def process_yolo(self):
         """기본 15Hz. 새 영상 한 장을 검출 → 조향 → 발행하고 같은 영상을 재처리하지 않는다."""
-        if self.lane_detection_algorithm != 'yolo_lane':
+        if not self.lane_enabled or self.lane_detection_algorithm != 'yolo_lane':
             return
         msg, self.yolo_msg = self.yolo_msg, None
         if msg is None:
@@ -213,6 +223,17 @@ class DrivingNode(Node):
             self.reset_yolo()
         finally:
             self.last_yolo_processing_seconds = time.perf_counter() - started
+
+    def lane_state_callback(self, msg: Bool):
+        self.lane_enabled = msg.data
+        if not self.lane_enabled:
+            # 정지 신호마다 0 속도를 보낸다. 재개할 때 이전 영상을 쓰지 않도록 비운다.
+            self.cmd_vel_pub.publish(Twist())
+            self.reset_yolo()
+            self.get_logger().info('Lane driving stopped.')
+        else:
+            # 저장된 camera_msg를 처리하지 않고 이후 카메라 콜백의 영상을 기다린다.
+            self.get_logger().info('Lane driving enabled.')
 
     def intersection_state_callback(self, msg: Bool):
         if self.is_intersection == msg.data:

@@ -11,7 +11,10 @@ from sensor_msgs.msg import CompressedImage
 
 
 # 현재 패키지에서 사용하는 영상 토픽. 새 영상 출력은 이 목록에 추가한다.
-IMAGE_TOPICS = ('camera', 'camera_raw', 'camera_raw_16_9', 'debug1', 'debug2')
+IMAGE_TOPICS = (
+    'camera', 'camera_raw', 'camera_raw_16_9', 'camera2',
+    'debug1', 'debug2',
+)
 
 
 class DrivingDebugNode(Node):

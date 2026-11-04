@@ -132,7 +132,7 @@ self.declare_parameter('basic_threshold.threshold', 180)
 
 ### 2-4. 카메라 콜백에 실행 분기를 추가한다
 
-아래 코드는 `camera_callback` 안의 기존 두 분기 다음에 넣는 예제다. `msg`, `cv2`, `Twist`는 기존 함수 인자와 import를 사용한다.
+아래 코드는 `camera_callback` 안의 기존 두 분기 다음에 넣는 예제다. 함수 앞의 `lane_enabled` 검사 뒤에 두어 주행 정지 시 이 분기도 실행되지 않게 한다. `msg`, `cv2`, `Twist`는 기존 함수 인자와 import를 사용한다.
 
 ```python
 if self.lane_detection_algorithm == 'basic_threshold':
@@ -174,7 +174,7 @@ def publish_debug_basic_threshold(self):
 
 현재 Sat/Sobel과 같은 `/debug1`을 사용하면 구독자는 선택한 검출기의 영상을 계속 볼 수 있다. 알고리즘 하나를 추가할 때마다 새 토픽이 필요한 것은 아니다. 여러 처리 단계의 영상을 동시에 보고 싶을 때 별도 발행을 연결한다. `/debug2`는 현재 선언만 돼 있으므로 사용하려면 실제 발행 코드를 넣어야 한다.
 
-모든 검출기는 디버그 표시본을 만들고 노드는 토픽으로만 발행한다. 새 알고리즘에도 GUI 창이나 키 입력 코드를 넣지 않는다. 화면 표시는 `driving_debug` 노드가 담당한다. 현재 camera/camera_raw/camera_raw_16_9/debug1/debug2를 모두 구독하므로 기존 debug1을 쓰면 뷰어 수정이 필요 없다. 새 영상 토픽을 만들면 `driving/driving_debug.py`의 `IMAGE_TOPICS`와 README도 갱신한다. 공통 발행 함수는 전달한 stamp와 선택적 frame_id를 사용한다. basic 예제는 출력 시각을 사용한다. YOLO처럼 입력과 대응시키려면 `publish_compressed(self.debug_pub1, image, msg.header.stamp, msg.header.frame_id)`로 호출한다.
+모든 검출기는 디버그 표시본을 만들고 노드는 토픽으로만 발행한다. 새 알고리즘에도 GUI 창이나 키 입력 코드를 넣지 않는다. 화면 표시는 `driving_debug` 노드가 담당한다. 현재 camera/camera_raw/camera_raw_16_9/camera2/debug1/debug2를 모두 구독하므로 기존 debug1을 쓰면 뷰어 수정이 필요 없다. 새 영상 토픽을 만들면 `driving/driving_debug.py`의 `IMAGE_TOPICS`와 README도 갱신한다. 공통 발행 함수는 전달한 stamp와 선택적 frame_id를 사용한다. basic 예제는 출력 시각을 사용한다. YOLO처럼 입력과 대응시키려면 `publish_compressed(self.debug_pub1, image, msg.header.stamp, msg.header.frame_id)`로 호출한다.
 
 ### 2-6. 빌드하고 선택해 본다
 
@@ -184,6 +184,7 @@ README의 빌드·실행 절차를 따른 뒤, ROS 환경을 읽은 다른 터�
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_threshold}"
 ros2 param set /driving basic_threshold.threshold 190
 ros2 param get /driving basic_threshold.threshold
+ros2 topic pub --once /lane_state std_msgs/msg/Bool "{data: true}"
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sat}"
 ```
 
@@ -236,12 +237,12 @@ twist = self.my_controller.makeTwist(center, lane_mode=lane_mode)
 3. `steering/pure_pursuit.py`: 원본 PurePursuit 계산을 보관한다. `LanePurePursuit.makeTwist(target, mode, ...)`가 일반·교차로 속도 정책과 `compute_to()`를 연결한다. 노드에서 전달한 `intersection`이 참이면 `v_max_intersection`과 내부 곡률 배율 0.7을 적용한다. 미검출과 한쪽 차선 정책은 원본대로 유지한다.
 4. 노드: `YoloLane`은 첫 유효 YOLO 프레임에서 생성하고 모델을 재사용한다. `LanePurePursuit`는 시작 때 생성한다. `camera_callback`은 YOLO 조합이면 최신 메시지만 저장하고 반환하며, `process_yolo` 타이머에서 계산·발행한다.
 5. 파라미터: 원본 값들은 노드에서 `yolo_lane.*`, `pure_pursuit.*`로 선언하고 함수 인자로 전달한다. 원본의 창 표시 옵션은 제거하고 디버그 토픽 발행만 유지했다. 모델 경로·장치·처리 주기는 시작 전용이며 나머지는 처리할 때 읽는다. 기하 설정 변경 시 검출 추적을 초기화한다.
-6. 선택 전환: `selection_changed`가 0 Twist를 발행하고 `reset_yolo`로 대기 영상·차선 추적·조향 평활화를 비운다. 새로운 상태 보유 알고리즘은 그 알고리즘의 reset도 이 위치에 연결한다. 매 프레임 초기화하면 추적과 평활화가 사라지므로 전환과 프레임 처리를 구분한다.
+6. 선택 전환: `selection_changed`가 0 Twist를 발행하고 `reset_yolo`로 대기 영상·차선 추적·조향 평활화를 비운다. 새로운 상태 보유 알고리즘은 선택 변경과 `lane_state_callback`의 정지 처리에서 그 알고리즘의 reset도 연결한다. 매 프레임 초기화하면 추적과 평활화가 사라지므로 전환과 프레임 처리를 구분한다.
 7. 자산: 모델을 `models/`에 두고 `setup.py`의 data_files로 share 경로에 설치했다. Python 외 의존성은 package.xml, 선택적 추론 의존성은 requirements-yolo.txt와 README의 환경 안내에 기록했다. 참조 저장소가 없어도 빌드한 패키지만으로 기본 모델을 찾을 수 있다.
 
-`target`은 basic의 픽셀 중심과 달리 차축 기준 전방 x/좌측 y 미터 좌표다. `None`은 정상 차선 미검출이며 기본 0.05m/s 직진으로 처리한다. `mode`는 both/yellow_only/white_only/lost이고 외부 enable `/lane_state`와는 별개다. `/lane_state`는 현재 제외했다. `/intersection_state` Bool은 노드가 구독해 `is_intersection`에 저장하고 YOLO 조향에만 전달한다. 초기값은 False이고 알고리즘 선택 변경에도 마지막 수신값을 유지한다. 교차로 상태 변경 자체는 추적·평활화를 초기화하지 않는다. `pure_pursuit.v_max_intersection`은 노드가 선언·조회하는 실시간 파라미터다. 새 조향기에 교차로 정책이 필요하면 해당 호출부에 상태와 설정을 명시적으로 전달한다. 원본 목표점을 `compute_to`에 전달하는 순서와 정상 미검출·한쪽 차선 정책을 보존해야 한다.
+`target`은 basic의 픽셀 중심과 달리 차축 기준 전방 x/좌측 y 미터 좌표다. `None`은 정상 차선 미검출이며 기본 0.05m/s 직진으로 처리한다. `mode`는 both/yellow_only/white_only/lost이고 외부 enable `/lane_state`와는 별개다. `/lane_state`는 초기 False이며 True를 받아야 차선 계산을 시작한다. 정지 신호는 대기 영상·추적·평활화를 초기화하지만 검출 선택과 교차로 상태는 유지한다. `/intersection_state` Bool은 노드가 구독해 `is_intersection`에 저장하고 YOLO 조향에만 전달한다. 초기값은 False이고 알고리즘 선택 변경에도 마지막 수신값을 유지한다. 교차로 상태 변경 자체는 추적·평활화를 초기화하지 않는다. `pure_pursuit.v_max_intersection`은 노드가 선언·조회하는 실시간 파라미터다. 새 조향기에 교차로 정책이 필요하면 해당 호출부에 상태와 설정을 명시적으로 전달한다. 원본 목표점을 `compute_to`에 전달하는 순서와 정상 미검출·한쪽 차선 정책을 보존해야 한다.
 
-15Hz는 YOLO에만 적용한다. 타이머는 새 메시지가 없으면 건너뛰고, 선택 전환 시 저장한 메시지를 버린다. 단일 executor이므로 느린 추론을 비동기로 바꾸는 기능은 아니다. 다른 알고리즘도 타이머가 필요하면 해당 입력·소비 시점을 명시적으로 연결하고 영상 콜백과 타이머에서 중복 계산하지 않는다.
+15Hz는 YOLO에만 적용한다. 타이머는 새 메시지가 없으면 건너뛰고, 선택 전환 시 저장한 메시지를 버린다. 단일 executor이므로 느린 추론을 비동기로 바꾸는 기능은 아니다. 타이머에도 `lane_enabled` 검사가 필요하다. 다른 알고리즘도 타이머가 필요하면 해당 입력·소비 시점을 명시적으로 연결하고 영상 콜백과 타이머에서 중복 계산하지 않는다.
 
 원본 계산을 나눌 때는 같은 마스크 **순서**에 대한 목표점·속도·평활화 상태를 비교한다. 독립 영상만 비교하면 이전 프레임을 사용하는 추적 차이를 놓칠 수 있다. 실제 추론 시간은 디버그 생성까지 포함해 측정하고, 타이머 검사에서 대체한 추론을 실제 모델 성능으로 보고하지 않는다.
 
@@ -250,7 +251,7 @@ twist = self.my_controller.makeTwist(center, lane_mode=lane_mode)
 현재 `camera_raw_callback`과 `camera_raw_16_9_callback`은 마지막 메시지만 저장한다. 새 알고리즘에서 이 값을 사용하려면 어떤 영상이 계산을 시작하는지 정해야 한다.
 
 - `/camera` 수신을 계기로 저장된 raw 영상을 함께 쓸 경우, raw 메시지가 아직 `None`인 경우를 처리한다. 저장된 영상이 같은 시각에 촬영됐다고 가정하지 않는다.
-- raw 토픽 수신을 계기로 계산한다면 해당 콜백에 선택된 알고리즘의 처리 경로를 연결한다. `/camera` 콜백에서도 같은 알고리즘을 다시 실행해 속도를 중복 발행하지 않도록 한다.
+- raw 토픽 수신을 계기로 계산한다면 해당 콜백에도 `lane_enabled` 검사를 넣고 선택된 알고리즘의 처리 경로를 연결한다. `/camera` 콜백에서도 같은 알고리즘을 다시 실행해 속도를 중복 발행하지 않도록 한다.
 - 새 검출기에서 해상도·디코딩·전처리를 처리한다. 기존 basic의 640×480 조건을 없애 다른 알고리즘까지 한꺼번에 맞추는 방식으로 변경하지 않는다.
 
 현재 세 입력을 동기화하는 기능은 없다. 여러 영상의 정확한 시간 대응이 필요한 알고리즘은 그 요구와 구현 범위를 따로 설명한다.
@@ -261,6 +262,7 @@ twist = self.my_controller.makeTwist(center, lane_mode=lane_mode)
 
 | 확인할 상황 | 확인할 결과 |
 | --- | --- |
+| 주행 시작·정지·재개 | 처음에는 계산하지 않고, False 수신 시 정지·대기 영상 폐기 후 True와 새 영상으로 재개하는가 |
 | 기존 기본 조합 | 변경 전과 같은 입력에서 계산 결과가 유지되는가 |
 | 새 알고리즘 선택 | 해당 분기가 실제로 실행되고 그 결과로 속도를 계산하는가 |
 | 기존 알고리즘으로 복귀 | 이전 모드나 오래된 디버그 영상이 잘못 사용되지 않는가 |
@@ -312,3 +314,15 @@ PR 설명에는 다음 내용을 넣는다.
 - 검증 환경, 사용한 입력, 실제 결과, 미확인 사항
 
 예를 들어 “Sobel과 비교하기 위해 threshold 검출을 추가했다. 동일한 ROI 좌표를 반환해 Basic_P를 사용한다. 합성 직선·미검출·선택 복귀를 확인했으며 실제 Galactic과 실차에서는 아직 검증하지 않았다”처럼 구현과 확인 범위를 함께 적는다.
+
+
+## 8. 외부 미션 패키지와 연결할 때
+
+미션은 사용자가 지정한 외부 저장소의 패키지를 사용한다. `driving`에 미션 노드나 실행 엔트리를 추가하거나 `/driving/detection` 목록에 미션 이름을 넣지 않는다. 외부 미션의 실행 예제와 입력 조건은 README의 외부 미션 연결 절을 참고한다.
+
+- 주행 허용은 `/lane_state` Bool로 연결한다. False 수신은 정지와 대기 영상·추적 초기화, True 수신은 이후 새 영상부터 주행을 의미한다.
+- 현재 `/lane_mode`는 구독하지 않는다. `/intersection_state`는 YOLO의 속도·곡률 정책이며 미션 전체의 방향 전환을 구현하는 신호가 아니다. 미연결 토픽의 동작을 가정하지 않는다.
+- 원본 신호등은 시작할 때 lane False를 보내지 않으므로 먼저 정지 상태를 설정한다. 외부 미션의 시작/취소와 주행 허용은 실제 코드에 맞춰 구분한다.
+- 직접 속도를 발행하는 외부 미션을 연결할 때는 차선 주행과의 제어권 전환을 확인한다. 모든 미션의 속도 경쟁이 자동 해결된다고 가정하지 않는다.
+- 새 외부 디버그 토픽을 표시하려면 실제 메시지 타입·영상 내용을 확인하고 뷰어의 IMAGE_TOPICS와 문서를 갱신한다. 현재는 camera2 원본 영상만 추가로 표시하며 신호등 전용 JPEG 발행은 없다.
+- 외부 패키지의 소스 수정과 검증은 요청 범위를 확인해 별도로 진행한다. 주행 인터페이스 검사와 실제 미션 전체의 성공을 구분해서 기록한다.
