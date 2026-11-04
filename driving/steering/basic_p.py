@@ -39,14 +39,15 @@ class Basic_P:
         )
 
     def __init__(self):
-        self.lane_mode=True # True: Left
+        # self.lane_mode=True # True: Left
+        pass
 
-    def changeLaneMode(self):
-        self.lane_mode = not self.lane_mode
+    # def changeLaneMode(self):
+    #     self.lane_mode = not self.lane_mode
 
-    def makeTwist(self, lane_center):
+    def makeTwist(self, lane_center, lane_mode=True):
         config = self.LEFT_LANE_CONFIG
-        if self.lane_mode == False:
+        if lane_mode == False:
             config = self.RIGHT_LANE_CONFIG
 
         # if lane_center == None: lane_center = config.roi_start_x

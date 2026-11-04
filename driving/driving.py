@@ -81,7 +81,7 @@ class DrivingNode(Node):
 
         ## 파라미터
         self.declare_parameter('basic_sat.beta', -5080.1)   # for basic_sat
-        self.declare_parameter('basic.lane_mode', True)   # for basic_sat & sobel
+        self.declare_parameter('basic.lane_mode', True)   # for basic_sat, basic_sobel & basic_p
 
 
 
@@ -97,8 +97,7 @@ class DrivingNode(Node):
                 lane_mode = self.get_parameter('basic.lane_mode').value
                 # self.get_logger().info(f'beta: {beta}')
                 center = self.basic_sat.detectCenterSaturation(msg, beta, lane_mode)
-                # 정상 영상의 미검출(None)은 basic_p가 기존 극단값으로 처리한다.
-                twist = self.basic_p.makeTwist(center)
+                twist = self.basic_p.makeTwist(center, lane_mode)
             except (ValueError, cv2.error) as error:
                 # 손상되거나 규격이 맞지 않는 영상은 차선 미검출과 구분한다.
                 self.get_logger().warning(f'Camera processing failed: {error}')
@@ -112,7 +111,7 @@ class DrivingNode(Node):
             try:
                 lane_mode = self.get_parameter('basic.lane_mode').value
                 center = self.basic_sobel.detectCenterSobel(msg, lane_mode)
-                twist = self.basic_p.makeTwist(center)
+                twist = self.basic_p.makeTwist(center, lane_mode)
             except (ValueError, cv2.error) as error:
                 self.get_logger().warning(f'Camera processing failed: {error}')
                 self.cmd_vel_pub.publish(Twist())
