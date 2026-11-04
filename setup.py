@@ -12,7 +12,6 @@ setup(
         ('share/' + package_name, ['package.xml']),
     ],
     install_requires=['setuptools'],
-    tests_require=['pytest'],
     python_requires='>=3.8',
     zip_safe=True,
     maintainer='ubuntu',
@@ -22,7 +21,6 @@ setup(
     entry_points={
         'console_scripts': [
             'driving = driving.driving:main',
-            'driving_debug = driving.debug_viewer:main',
         ],
     },
 )
