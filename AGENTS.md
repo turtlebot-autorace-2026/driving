@@ -14,6 +14,18 @@
 
 노드의 파라미터를 함수 인자로 전달한다. 각 알고리즘은 필요한 메시지나 수치를 받아 계산하고, ROS Node 생성·구독·발행은 공통 노드에서 관리한다.
 
+## 현재 YOLO 연결 기준
+
+- 지원 조합은 Sat/Basic_P, Sobel/Basic_P, YOLO/LanePurePursuit다. 기본 선택은 Sat/Basic_P다. 지원하지 않는 조합은 0 Twist로 처리하며 명시적 분기를 유지한다.
+- YOLO 입력은 보정된 `/camera` 압축영상이다. 원본의 640×480 BEV, `LanePath.target()` → `PurePursuit.compute_to()` 순서, 모델 클래스 0 white/1 yellow를 보존한다. basic의 ROI나 픽셀 중심으로 대체하지 않는다.
+- 검출 출력 `(target, mode)`의 target은 차축 기준 전방 x/좌측 y의 미터 좌표 또는 None이다. mode는 both/yellow_only/white_only/lost다. 정상 미검출은 기본 0.05m/s 직진, 한쪽 검출은 속도 0.8배이며 입력/추론 오류의 정지와 구분한다.
+- `/lane_state`, `/intersection_state`와 교차로 감속은 현재 제외 범위다. 내부 검출 mode와 외부 enable을 혼동하지 않는다. 기존 Basic_P에 사용자가 남긴 교차로 주석은 별개로 보존한다.
+- YOLO만 최신 수신 메시지 + 기본 15Hz 타이머로 처리한다. 같은 메시지 재처리와 카메라 콜백의 중복 추론을 피한다. 타이머는 단일 executor 안에서 동기 실행되므로 실제 15fps나 비차단 수신을 보장하지 않는다.
+- 모델은 첫 사용에 한 번 로드하고 재사용한다. 선택 변경은 정지 발행 후 대기 영상·추적·조향 평활화를 초기화한다. 새 조향기를 추가할 때 camera_callback과 selection_changed의 지원 조합 조건도 갱신한다.
+- 원본 설정은 노드의 ROS 파라미터로 유지한다. 모델 경로·장치·주기는 시작 전용 read_only이고 나머지 튜닝값은 프레임마다 읽는다. 창 표시 설정은 제거했다. 유효 범위 검사와 실제 적용 시점을 문서에 적는다.
+- 주행 노드와 알고리즘은 디버그 영상 생성·JPEG 토픽 발행만 담당한다. GUI 창·키 입력 코드는 넣지 않는다. 화면 표시는 별도 디버그 노드의 역할이며 해당 노드는 아직 구현하지 않았다.
+- YOLO 디버그는 원본 draw와 입력 header를 보존한다. 모델 출처·해시는 models/README.md, 설치 경로는 setup.py의 share data_files를 확인한다. 기본 알고리즘 실행에 Ultralytics import를 강제하지 않는다.
+
 ## 수정 원칙
 
 - 현재 요청을 완료하는 작은 변경부터 한다. 설명·검토 요청을 전체 구현이나 리팩터링 승인으로 확대하지 않는다.

@@ -1,161 +1,214 @@
 # driving
 
-팀원들이 개발한 차선 검출과 조향 알고리즘을 하나의 ROS 2 노드에서 연결하는 Python 패키지다. 카메라 영상을 받아 선택된 검출기를 실행하고, 조향기가 만든 `Twist`를 발행한다. 알고리즘별 전처리와 디버그 영상 생성은 각 알고리즘 파일에 둔다.
+팀원들이 개발한 차선 검출과 조향 알고리즘을 하나의 ROS 2 노드에서 연결하는 Python 패키지다. 공통 노드는 영상·선택 토픽·파라미터·발행을 관리하고, 검출과 조향은 각각의 파일에서 계산한다.
 
-**목표 환경은 ROS 2 Galactic / Python 3.8이다.** 다른 배포판에서 실행했다면 해당 환경과 검증 범위를 따로 기록한다.
+**목표 환경은 ROS 2 Galactic / Python 3.8이다.** 현재 개발 VM의 Humble/Python 3.10 검증과 Galactic·실차 검증은 구분한다.
 
-- 사용 방법과 현재 상태: 이 문서
-- 새 알고리즘 이식 방법: [CONTRIBUTING.md](CONTRIBUTING.md)
-- 에이전트의 수정 원칙: [AGENTS.md](AGENTS.md)
+- 새 알고리즘 이식: [CONTRIBUTING.md](CONTRIBUTING.md)
+- 에이전트 작업 원칙: [AGENTS.md](AGENTS.md)
+- YOLO 원본과 모델 출처: [models/README.md](models/README.md)
 
-## 구조와 역할
+## 구조와 호출 순서
 
 ```text
 driving/
 ├── driving/
-│   ├── driving.py              # ROS 통신, 선택, 파라미터 조회, 호출 순서
+│   ├── driving.py                # ROS 통신, 파라미터, 선택 분기, 15Hz 타이머
 │   ├── detection/
-│   │   ├── basic_sat.py        # 밝기 변환을 이용한 검출
-│   │   └── basic_sobel.py      # Sobel 경계를 이용한 검출
+│   │   ├── basic_sat.py          # 밝기 변환 → 한쪽 ROI 중심
+│   │   ├── basic_sobel.py        # Sobel 경계 → 한쪽 ROI 중심
+│   │   ├── yolo_lane.py          # JPEG → BEV → YOLO → 목표점과 mode
+│   │   └── lane_estimator.py     # 원본 BEV/차선 곡선/목표점 계산
 │   └── steering/
-│       └── basic_p.py          # 중심 위치를 이용한 조향 계산
+│       ├── basic_p.py            # ROI 중심 → Twist
+│       └── pure_pursuit.py       # 미터 목표점 → 원본 PurePursuit → Twist
+├── models/lane_yolo26n_seg.pt
+├── requirements-yolo.txt
 ├── package.xml
-├── setup.py
-├── README.md
-├── CONTRIBUTING.md
-└── AGENTS.md
+└── setup.py
 ```
 
-`__init__.py`, 패키지 리소스 등은 위 설명에서 생략했다.
-
-| 구성 요소 | 담당하는 일 |
-| --- | --- |
-| `DrivingNode` | 구독·발행, 선택 이름 관리, 객체 생성, 파라미터 조회, 알고리즘 호출 |
-| 검출기 | 영상 디코딩, 자체 전처리와 ROI, 검출 계산, 미검출 정책, 디버그 표시본 생성 |
-| 조향기 | 검출 결과를 해석해 `Twist` 계산 |
-
-노드에서 명시적인 `if` 분기로 검출기를 호출한다. 객체는 시작할 때 한 번 생성하고 재사용한다. 새로운 알고리즘도 기존 호출 흐름을 읽으며 연결할 수 있도록 작성한다.
+`__init__.py`와 문서 등은 생략했다. 알고리즘 연결은 노드의 명시적 분기로 작성한다. 계산 객체를 재사용하며, YOLO 모델은 해당 조합의 첫 영상 처리 때 한 번 로드한다. basic만 사용하면 Ultralytics를 import하거나 모델을 로드하지 않는다.
 
 ```mermaid
-flowchart LR
-    camera["camera: CompressedImage"] --> callback["camera_callback"]
-    selection["driving/detection: 선택 이름"] --> callback
-    params["ROS 파라미터"] --> callback
-    callback --> detector["선택된 Basic_Sat 또는 Basic_Sobel"]
-    detector -->|center| controller["Basic_P.makeTwist"]
-    controller --> cmd["cmd_vel: Twist"]
-    detector -->|"debug()"| debug["노드에서 JPEG 인코딩"]
-    debug --> topic["debug1: CompressedImage"]
+flowchart TD
+    camera["/camera: JPEG"] --> callback["camera_callback"]
+    callback --> basic["Sat/Sobel + Basic_P: 즉시 계산"]
+    callback --> latest["YOLO 선택: 최신 수신 메시지 저장"]
+    latest --> timer["기본 15Hz process_yolo: 새 메시지 소비"]
+    timer --> detect["YoloLane.detectLane → target, mode"]
+    detect --> steer["LanePurePursuit.makeTwist"]
+    basic --> output["cmd_vel / JPEG debug1"]
+    steer --> output
 ```
 
-영상 콜백 안에서 검출 → 조향 → 속도 발행 → 디버그 처리를 순서대로 실행한다. 현재는 별도 worker나 동적 플러그인 등록 기능이 없다.
+주행 노드는 디버그 영상을 생성해 `/debug1`에 JPEG로 발행한다. 로컬 창을 띄우지 않으므로 화면 환경 없이 실행할 수 있다.
 
-## 현재 알고리즘의 의미
+YOLO 타이머는 저장된 메시지를 꺼내고 저장 자리를 비운다. 새 입력이 없으면 같은 영상을 다시 계산하거나 속도를 반복 발행하지 않는다. Sat/Sobel은 영상 콜백에서 기존대로 처리한다.
 
-기본 조합은 `basic_sat` + `basic_p`다. 검출기는 `basic_sobel`로 바꿀 수 있다.
+**15Hz는 목표 처리 주기다.** 단일 executor에서 동기 추론하므로 전체 처리 시간이 약 66.7ms를 넘으면 실제 15fps를 보장하지 않는다. 추론 중 영상·선택·파라미터 서비스 콜백도 지연될 수 있다. 저장하는 최신 영상은 구독 콜백이 실제 수신한 것 중 최신이며 DDS 큐 전체의 지연까지 제거하는 기능은 없다. 별도 worker는 없다.
 
-두 검출기 모두 디코딩 결과가 **640×480 BGR 영상**이어야 한다. 이를 640×120으로 원근변환한 뒤 왼쪽 또는 오른쪽의 320×120 ROI 하나를 처리한다.
+## 알고리즘별 입력과 결과
 
-| 항목 | 현재 basic 구현 |
+기본 선택은 `basic_sat` + `basic_p`다.
+
+| 검출 | 조향 | 전달하는 결과 |
+| --- | --- | --- |
+| `basic_sat` | `basic_p` | 한쪽 ROI 내부 픽셀 x좌표와 좌우 모드 |
+| `basic_sobel` | `basic_p` | 같은 좌표계의 중심과 좌우 모드 |
+| `yolo_lane` | `pure_pursuit` | `(target, mode)`: 미터 단위 목표점과 검출 상태 |
+
+다른 조합은 0 `Twist`를 발행하고 유효한 선택을 기다린다. 선택 이름이 바뀌면 먼저 0 `Twist`를 발행하고 YOLO 대기 영상, 차선 추적, 조향 평활화 상태를 비운다. 돌아왔을 때 모델은 재사용하며 새 영상을 기다린다. 잘못된 이름·빈 이름은 무시하고, 같은 이름 재전송은 초기화하지 않는다.
+
+### basic
+
+두 검출기는 640×480 BGR 영상이 필요하다. 640×120으로 원근변환한 다음 한쪽 320×120 ROI를 처리한다.
+
+| 항목 | 동작 |
 | --- | --- |
-| 왼쪽 모드 | `lane_mode=True`, 원근변환 영상의 `x=0:320` |
-| 오른쪽 모드 | `lane_mode=False`, 원근변환 영상의 `x=320:640` |
-| 반환값 `center` | 선택한 ROI 내부의 x좌표. 정상 검출 좌표 범위는 0~319 |
-| 차선 미검출 | 검출기가 왼쪽 0 / 오른쪽 320을 반환 |
-| `Basic_P` 목표 위치 | 왼쪽 ROI에서는 60, 오른쪽 ROI에서는 260 |
-| 디버그 영상 | 처리한 이진 ROI를 BGR로 변환하고 `(center, 60)`에 빨간 점 표시 |
+| 왼쪽 | `basic.lane_mode=true`, ROI `x=0:320`, 조향 목표 60 |
+| 오른쪽 | `basic.lane_mode=false`, ROI `x=320:640`, 조향 목표 260 |
+| 정상 반환 | 해당 ROI 내부의 x좌표 0~319 |
+| 차선 미검출 | 왼쪽 0 / 오른쪽 320으로 조향 |
+| 디버그 | 이진 ROI를 BGR로 바꾸고 `(center, 60)`에 빨간 점 |
 
-`basic_sat`은 회색 영상에 `clip(29.12 * 밝기 + beta, 0, 255)`를 적용한 뒤 이진화한다. HSV 채도를 조절하는 계산은 아니다. `basic_sobel`은 x방향 경계, 이진화, 형태학 처리, 작은 연결요소 제거로 검출한다.
+Sat은 회색 밝기에 `clip(29.12 * 밝기 + beta, 0, 255)`를 적용하며 HSV 채도 계산은 아니다. Sobel은 x방향 경계와 형태학 처리, 작은 연결요소 제거를 사용한다. 여러 윤곽의 중심이 평균에 포함될 수 있다. 미검출 대체값에도 점이 찍히므로 점 표시만으로 검출 성공을 판단하지 않는다. 오른쪽 대체값 320의 점은 일부가 영상 밖에 놓인다.
 
-한쪽 ROI 안에서도 여러 윤곽의 중심이 평균에 포함될 수 있다. 미검출 대체값에도 빨간 점이 찍히므로, 점이 있다는 사실만으로 유효 차선을 검출했다고 판단하면 안 된다. 오른쪽 대체값 320은 영상 오른쪽 경계 밖이어서 원의 일부만 표시된다.
+검출과 `Basic_P.makeTwist(center, lane_mode)`에 같은 모드를 전달한다. Basic_P는 모드를 객체에 저장하지 않으며 인자 생략 시 왼쪽 기준인 `True`를 사용한다. 기존 basic 계산과 향후 사용 예정인 ROI·색상·교차로 설정은 유지했다. 사용하지 않는 창 이름 설정은 제거했다.
 
-이 좌표계와 미검출 정책은 현재 basic 조합의 규칙이다. 새 알고리즘의 반환 형식을 모두 여기에 맞추도록 강제하지 않는다. 연결할 조향기가 해석할 수 있는 결과를 제공하고 의미를 문서화한다.
+### YOLO + Pure Pursuit
+
+입력은 원본과 같은 `/camera`의 보정된 영상이다. JPEG 디코딩 → 640×480 BEV → YOLO segmentation → 색별 차선 곡선 → 중앙 경로 → 목표점 순서다. 다른 크기는 원본 `to_bev`처럼 640×480으로 resize하지만, 카메라 기하까지 자동 보정하는 것은 아니다. basic의 640×120 변환은 사용하지 않는다.
+
+- 모델 클래스: `0=white`, `1=yellow`. 왼쪽 노란 차선과 오른쪽 흰 차선을 가정한다.
+- `target`: 차축 기준 `(전방 x, 좌측 y)` 좌표이며 단위는 m. 미검출은 `None`.
+- `mode`: `both`, `yellow_only`, `white_only`, `lost`. 외부 실행 상태 토픽과 별개인 내부 검출 결과다.
+- 양쪽 차선은 중앙 경로를, 한쪽 차선은 원본 법선 offset 경로를 계산한다. 비정상 차선 폭에서 이전 목표점과 가까운 차선을 선택하는 원본 규칙도 유지한다.
+- 목표점은 `LanePath.target()`으로 구해 `PurePursuit.compute_to()`에 전달한다. 범용 `compute(path)`는 목표점 선택 방식이 달라 사용하지 않는다.
+- 정상 차선 추종의 최대 속도 기본값은 0.18m/s, 한쪽 검출은 계산 속도의 0.8배다.
+- **정상 영상의 차선 미검출은 원본처럼 0.05m/s 직진, 각속도 0이다.** 정지 정책과 다르다.
+- 디버그는 BEV 위에 마스크, 차선 곡선, 중앙 경로, 목표점, ROI와 속도를 표시한다. 원본 `draw()`를 사용하며 JPEG header는 입력 header를 보존한다.
+
+`/lane_state`, `/intersection_state`, 교차로 감속 설정은 포함하지 않는다. 유효한 YOLO 조합 선택이 실행 조건이다. 원본의 일반 차선 모드(`intersection=False`)를 비교 기준으로 삼는다. 기본 BEV 변환점, 카메라 높이, 차축 위치와 차선 폭의 실물 적합성은 대상 카메라에서 확인해야 한다.
 
 ## 빌드와 실행
 
-ROS 2와 colcon, rosdep이 준비된 환경에서 사용한다. 의존성은 `rclpy`, `sensor_msgs`, `geometry_msgs`, `std_msgs`, OpenCV, NumPy이며 [package.xml](package.xml)에 선언돼 있다.
+ROS 의존성은 [package.xml](package.xml), 선택적 YOLO Python 의존성은 [requirements-yolo.txt](requirements-yolo.txt)에 있다. 모델은 빌드 시 `share/driving/models`에 설치된다.
 
-다음은 저장소를 `~/turtlebot3_ws/src/driving`에 둔 경우다. 작업 공간 위치가 다르면 `DRIVING_WS`를 바꾼다.
+다음은 Galactic 기준 명령이다. 현재 Humble 개발 VM에서는 ROS setup 경로를 `/opt/ros/humble/setup.bash`로 바꾼다.
 
 ```bash
 source /opt/ros/galactic/setup.bash
 DRIVING_WS="$HOME/turtlebot3_ws"
 cd "$DRIVING_WS"
 rosdep install --from-paths src/driving --ignore-src -r -y
-colcon build --symlink-install --packages-select driving
+PYTHONNOUSERSITE=1 /usr/bin/colcon build --symlink-install --packages-select driving
 source install/setup.bash
+# basic 실행: 디버그 영상은 /debug1 토픽으로 발행한다.
 ros2 run driving driving --ros-args -r cmd_vel:=cmd_vel_preview
 ```
 
-위 실행 예제는 계산 결과를 `/cmd_vel_preview`로 보내 연결을 확인한다. 실제 `/cmd_vel`에 연결할 때는 `-r cmd_vel:=cmd_vel_preview`를 제거한다. 현재 노드에는 `cv2.imshow("test", ...)` 호출도 있으므로 GUI를 사용할 수 있는 환경이 필요하다.
+빌드는 기본 ROS 환경에서 시스템 colcon을 사용한다. 위 `PYTHONNOUSERSITE=1`은 사용자 영역 setuptools가 시스템 빌드 도구와 섞이는 기존 충돌을 피하기 위한 실행 설정이며 패키지를 삭제하지 않는다.
 
-카메라 발행기나 bag 재생기는 별도로 실행해야 한다. 이 패키지는 입력 영상을 만들지 않는다. 현재 basic 검출기는 `/camera`의 640×480 영상을 사용하므로 `/camera_raw_16_9`만 발행되는 bag을 재생해도 계산이 시작되지 않는다. 다른 토픽을 remap할 때도 해상도와 메시지 타입이 맞아야 한다.
-
-새 터미널마다 ROS 및 작업 공간의 setup을 읽고, 통신할 노드끼리 `ROS_DOMAIN_ID` 등 ROS 통신 설정을 맞춘다. Humble에서 확인한 결과는 Galactic 실행 검증과 구분한다.
-
-## 토픽
-
-소스에서는 상대 이름을 사용한다. 아래 이름은 별도 namespace나 remap 없이 실행했을 때 기준이다.
-
-| 이름 | 방향 | 메시지 | 현재 용도 |
-| --- | --- | --- | --- |
-| `/camera` | 구독 | `sensor_msgs/msg/CompressedImage` | 차선 검출·조향을 실행하는 입력 |
-| `/camera_raw` | 구독 | `sensor_msgs/msg/CompressedImage` | 마지막 메시지 저장만 수행 |
-| `/camera_raw_16_9` | 구독 | `sensor_msgs/msg/CompressedImage` | 마지막 메시지 저장만 수행 |
-| `/driving/detection` | 구독 | `std_msgs/msg/String` | `basic_sat`, `basic_sobel` 선택 |
-| `/driving/steering` | 구독 | `std_msgs/msg/String` | 현재 허용값은 `basic_p` 하나 |
-| `/cmd_vel` | 발행 | `geometry_msgs/msg/Twist` | 계산한 선속도·각속도 |
-| `/debug1` | 발행 | `sensor_msgs/msg/CompressedImage` | 선택된 검출기의 JPEG 디버그 영상 |
-| `/debug2` | 발행자 생성 | `sensor_msgs/msg/CompressedImage` | 현재 메시지 발행 없음 |
-
-영상 구독 3개는 `qos_profile_sensor_data`를 사용한다. 선택 구독 및 발행자는 depth 10의 기본 QoS를 사용한다. `raw`라는 이름의 두 입력도 현재 메시지 타입은 비압축 `Image`가 아닌 `CompressedImage`다.
+YOLO는 ROS와 같은 시스템 Python 기반 venv에 PyTorch/torchvision/Ultralytics를 준비한다. 이미 환경이 있으면 다시 만들지 않는다. 현재 개발 환경 경로는 `~/turtlebot3_ws/.venv`이며 venv에 `COLCON_IGNORE`를 둔다. 기본 환경에서 빌드한 console script의 Python은 venv 활성화만으로 바뀌지 않으므로, YOLO 실행은 인터프리터를 명시한다.
 
 ```bash
-ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sobel}"
-ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sat}"
+source /opt/ros/galactic/setup.bash
+DRIVING_WS="$HOME/turtlebot3_ws"
+source "$DRIVING_WS/install/setup.bash"
+"$DRIVING_WS/.venv/bin/python" -m driving.driving --ros-args \
+  -r cmd_vel:=cmd_vel_preview -p yolo_lane.device:=cpu
 ```
 
-선택 콜백은 허용된 이름을 저장하고, 이후 영상 콜백이 해당 분기를 실행한다. 빈 문자열과 목록 밖 이름은 경고를 남기고 무시한다. 이미 처리 중인 프레임을 중단하거나 객체를 새로 만드는 방식은 아니다. 조향은 두 검출 분기 모두 현재 `Basic_P`를 직접 호출한다.
+위 프로세스는 처음에 basic 조합으로 시작한다. 아래 선택 명령으로 YOLO를 활성화한다. 카메라 발행기나 bag 변환기는 별도로 실행해야 하며, 이 패키지는 입력 영상을 만들지 않는다. `/camera_raw_16_9`만 재생하면 `/camera`를 사용하는 계산은 시작되지 않는다.
+
+Jetson Orin Nano / JetPack 5에서는 해당 JetPack·Python에 맞는 NVIDIA PyTorch/torchvision을 별도로 준비한다. VM의 venv·wheel을 그대로 복사하지 않으며, 의존성 설치가 해당 torch를 일반 CPU 패키지로 교체하지 않게 관리한다. 실제 CUDA 추론은 대상 장치에서 검증해야 한다.
+
+`cmd_vel_preview`는 검증용 출력이다. 실제 로봇에 연결할 때만 remap을 제거한다. 통신할 터미널끼리 ROS setup, workspace setup, `ROS_DOMAIN_ID` 등을 맞춘다.
+
+## 토픽과 선택
+
+소스는 상대 이름을 사용한다. 아래는 namespace/remap이 없을 때의 이름이다.
+
+| 이름 | 방향 / 메시지 | 역할 |
+| --- | --- | --- |
+| `/camera` | 구독 / `sensor_msgs/msg/CompressedImage` | 모든 현재 검출기의 입력 |
+| `/camera_raw`, `/camera_raw_16_9` | 구독 / `sensor_msgs/msg/CompressedImage` | 마지막 메시지 저장만 수행 |
+| `/driving/detection` | 구독 / `std_msgs/msg/String` | `basic_sat`, `basic_sobel`, `yolo_lane` |
+| `/driving/steering` | 구독 / `std_msgs/msg/String` | `basic_p`, `pure_pursuit` |
+| `/cmd_vel` | 발행 / `geometry_msgs/msg/Twist` | 선속도와 각속도 |
+| `/debug1` | 발행 / `sensor_msgs/msg/CompressedImage` | 선택한 알고리즘의 JPEG |
+| `/debug2` | 발행자 생성 / `sensor_msgs/msg/CompressedImage` | 현재 발행 없음 |
+
+영상 구독은 `qos_profile_sensor_data`, 선택 구독과 발행은 depth 10 기본 QoS다. 이름에 raw가 있어도 현재 메시지 타입은 `CompressedImage`다.
+
+```bash
+# YOLO 조합 선택. 두 명령 사이의 미지원 조합에서는 정지한다.
+ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: yolo_lane}"
+ros2 topic pub --once /driving/steering std_msgs/msg/String "{data: pure_pursuit}"
+# basic으로 복귀
+ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sat}"
+ros2 topic pub --once /driving/steering std_msgs/msg/String "{data: basic_p}"
+# basic_p와 함께 Sobel 사용
+ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sobel}"
+```
 
 ## 파라미터
 
-| 이름 | 타입 / 기본값 | 반영 위치 |
+선언·조회는 모두 `DrivingNode`가 담당한다. 알고리즘은 노드가 전달한 값을 사용하며 ROS Node를 만들거나 파라미터를 직접 조회하지 않는다. 실수는 `0.5`, 정수는 `640`처럼 타입에 맞게 설정한다.
+
+| 이름 | 기본값 | 적용 시점 / 의미 |
 | --- | --- | --- |
-| `basic_sat.beta` | 실수 / `-5080.1` | Sat의 고기울기 밝기 변환. alpha는 29.12 고정 |
-| `basic.lane_mode` | bool / `true` | 선택된 검출기의 ROI와 `Basic_P`의 좌우 조향 기준 |
+| `basic_sat.beta` | `-5080.1` | Sat 프레임마다 / 밝기 변환의 beta, alpha=29.12 고정 |
+| `basic.lane_mode` | `true` | basic 프레임마다 / 검출과 조향의 좌우 모드 |
+| `yolo_lane.model_path` | 설치된 모델 경로 | 시작 시 / 읽기 전용, 모델은 첫 YOLO 처리 때 로드 |
+| `yolo_lane.device` | `''` | 시작 시 / 읽기 전용, 자동 선택 또는 `cpu`, `0` |
+| `yolo_lane.process_hz` | `15.0` | 시작 시 / 읽기 전용, 유한한 양수 |
+| `yolo_lane.conf` | `0.4` | YOLO 프레임마다 / 신뢰도 기준 0~1 |
+| `yolo_lane.imgsz` | `640` | YOLO 프레임마다 / 추론 입력 크기, 양의 정수 |
+| `yolo_lane.publish_debug` | `true` | YOLO 프레임마다 / JPEG 발행 여부 |
+| `yolo_lane.camera_height` | `0.129` | YOLO 프레임마다 / 카메라 높이 m, 양수 |
+| `yolo_lane.roi_top_row` | `220` | YOLO 프레임마다 / BEV ROI 시작 행, 0~479 |
+| `yolo_lane.roi_half_width` | `250` | YOLO 프레임마다 / 로봇 기준 ROI 반폭 px, 양수 |
+| `yolo_lane.lookahead_row` | `400` | YOLO 프레임마다 / 목표점 행, 0~479 |
+| `yolo_lane.single_offset` | `0.5` | YOLO 프레임마다 / 단일 차선으로부터 차선 폭의 몇 배 떨어질지 |
+| `yolo_lane.lane_width` | `355.0` | YOLO 프레임마다 / BEV 차선 폭 px, 양수 |
+| `pure_pursuit.v_max` | `0.18` | YOLO 프레임마다 / 최대 속도 m/s |
+| `pure_pursuit.v_lost` | `0.05` | YOLO 프레임마다 / 미검출 직진 속도 m/s |
+| `pure_pursuit.k_lat` | `1.0` | YOLO 프레임마다 / 곡률 이득 |
+| `pure_pursuit.max_ang` | `1.2` | YOLO 프레임마다 / 평활화 전 각속도 제한 rad/s |
+| `pure_pursuit.k_v` | `0.6` | YOLO 프레임마다 / 곡률에 따른 감속 |
+| `pure_pursuit.ang_smooth` | `0.6` | YOLO 프레임마다 / 새 각속도 비중 0~1 |
+| `pure_pursuit.v_single` | `0.8` | YOLO 프레임마다 / 단일 차선 속도 배율 0~1 |
 
 ```bash
-ros2 param get /driving basic_sat.beta
-ros2 param set /driving basic_sat.beta -5000.0
-ros2 param get /driving basic.lane_mode
-```
-
-Sat 분기는 매 프레임 beta를 읽는다. beta를 높이면 같은 입력 밝기가 더 큰 변환값을 갖는다. Sobel 실행 중 바꾼 beta는 Sat을 다시 선택한 뒤 적용된다. 실수 파라미터는 `-5000.0`처럼 실수로 입력한다.
-
-`basic.lane_mode`는 Sat/Sobel 분기에서 매 프레임 읽으며, 검출 함수와 `Basic_P.makeTwist(center, lane_mode)`에 같은 값을 인자로 전달한다. `true`는 왼쪽, `false`는 오른쪽이다. 검출 알고리즘을 바꾸거나 왼쪽으로 돌아와도 해당 프레임에 전달된 모드로 조향한다.
-
-`Basic_P`는 좌우 모드를 객체 상태로 저장하지 않고 함수 인자로 받은 값을 사용한다. `makeTwist(center)`처럼 두 번째 인자를 생략하면 기본값 `True`로 왼쪽 기준을 사용하므로, 노드의 실행 분기에서는 해당 프레임의 `lane_mode`를 매번 전달한다.
-
-```bash
+ros2 param set /driving yolo_lane.conf 0.5
+ros2 param set /driving pure_pursuit.v_max 0.12
 ros2 param set /driving basic.lane_mode false
-ros2 param set /driving basic.lane_mode true
 ```
 
-런타임 변경값은 재시작하면 유지되지 않는다. 시작할 때 지정하려면 다음처럼 실행한다.
+기하 파라미터를 바꾸면 다음 YOLO 프레임에서 `LanePath`를 다시 생성해 차선 추적을 초기화한다. 조향 계산은 프레임마다 값을 받아 기존 평활화 상태를 이어간다. 선택 전환·미검출·처리 오류에서는 조향 상태도 초기화한다.
 
-```bash
-ros2 run driving driving --ros-args -r cmd_vel:=cmd_vel_preview -p basic_sat.beta:=-5000.0
-```
+시작 전용 파라미터는 실행 중 변경을 거부한다. 재시작 시 `--ros-args -p yolo_lane.process_hz:=10.0`처럼 지정한다. YOLO/PurePursuit의 나머지 숫자 범위 검사는 처리 시점에 수행하므로 `ros2 param set` 성공이 계산 가능한 값을 보장하지는 않는다. 잘못된 값은 처리 오류로 정지하고 로그를 남긴다. 변경값은 재시작 시 유지되지 않는다.
 
-`normal_angular_divisor` 등 조향기의 설정은 현재 소스의 상수이며 ROS 파라미터로 노출돼 있지 않다.
+Basic_P의 `normal_angular_divisor` 등은 기존 소스 상수다. 이번 이식에서 ROS 파라미터로 바꾸지 않았다.
 
-## 알려진 문제와 현재 범위
+## 확인한 결과와 남은 범위
 
-- **디버그 header:** 현재 출력 시각을 사용하고 `frame_id`는 비어 있다. 원본 영상의 header를 보존하지 않으므로 입력과 디버그 영상을 촬영 시각으로 대응시키는 기능은 없다.
-- **입력 오류와 미검출:** 검출 중 `ValueError` 또는 `cv2.error`가 발생하면 노드는 0 `Twist`를 발행한다. 정상 영상의 차선 미검출은 검출기의 0/320 대체값으로 조향하며 정지와 다르다. `Basic_P`의 `None` 대체 처리는 주석 처리돼 있다.
-- **동기 처리와 정지:** 처리 중인 영상 콜백이 오래 걸리면 같은 executor의 다음 콜백도 지연될 수 있다. 입력 중단을 감시하는 타이머와 종료 시 명시적인 0 `Twist` 발행은 없다.
-- **디버그 실행:** GUI 표시와 JPEG 처리는 영상 콜백에서 실행한다. 디버그 함수는 검출·조향의 예외 처리 범위 밖에 있으며, 별도 디버깅 노드는 현재 패키지에 없다.
-- **raw 입력 활용:** 두 raw 콜백은 저장만 한다. 다른 알고리즘에 연결할 때 입력 준비 여부와 처리 시작 시점을 정해야 한다. 세 영상의 시간 동기화는 구현돼 있지 않다.
-- **남아 있는 설명:** 일부 주석에는 미검출을 `None`으로 반환한다고 적혀 있고 Sobel의 해상도 오류 문구에는 `basic_sat`이 남아 있다. 실제 반환값과 위 설명을 기준으로 읽는다.
+2026-11-04 Ubuntu ARM64 VM / ROS 2 Humble / Python 3.10에서 다음을 확인했다.
 
-알려진 문제를 해결하면 구현과 이 목록을 함께 갱신한다. 새 알고리즘의 이식 순서와 확인 방법은 [기여 가이드](CONTRIBUTING.md)를 따른다.
+- 패키지 단독 colcon 빌드, 모델 share 설치, Python 3.8 문법 검사.
+- 원본 BEV/LanePath/PurePursuit 계산 정의 8개의 AST 동일성. 독립 12사례와 연속 12사례에서 원본 일반 차선 계산과 속도·평활화 결과 일치(허용 오차 1e-12), 디버그 픽셀 일치.
+- 실제 DDS에서 선택 전환·미지원 조합 정지·재선택 초기화·모델 재사용·파라미터 반영·JPEG/header·입력 및 추론 오류·기존 basic 좌우 미검출 동작 확인. 추론을 빠른 대체 함수로 바꾼 타이머 검사는 약 15Hz였다.
+- GUI 제거 후 화면 환경 변수 없이 Sat/Sobel의 320×120 JPEG와 YOLO의 640×480 JPEG 수신을 확인했다. 이 확인에서 YOLO 표시본은 준비한 검출 상태로 생성했으며 모델 추론은 재실행하지 않았다. YOLO 입력 header와 기존 발행 활성화 설정도 유지된다.
+- `normal` bag의 원본 영상을 camera_ros 방식으로 보정한 5개 표본에서 실제 CPU YOLO 추론과 ROS 발행 확인. 첫 표본은 원본 추론 함수와 마스크가 같았고, 5개 모두 같은 검출 결과에 대한 원본 속도 명령과 일치했다.
+- 최초 측정에서 모델 초기화 포함 약 0.63초, 이후 전체 프레임 처리 약 89~96ms였다. 이 VM에서 실제 15fps 달성 결과가 아니며 처리 여력은 대략 10~11fps 수준이다. 실행 부하에 따라 달라진다.
+
+실제 Galactic/Python 3.8 런타임, Jetson GPU, 실차, 전체 bag 정확도·완주는 검증하지 않았다. 원본과 계산이 같다는 사실이 현재 카메라에 맞는 보정이나 주행 성능을 보장하지 않는다.
+
+- **입력 중단:** 새 메시지가 없으면 처리를 건너뛴다. 입력 timeout 정지는 아직 없으므로 마지막 속도 명령에 대한 구동부 동작을 별도로 확인해야 한다.
+- **종료:** ROS가 살아 있는 정상 종료 경로에서 0 Twist 발행을 시도한다. 강제 종료·통신 종료 상황의 전달 보장은 없다.
+- **입력 오류와 미검출:** YOLO 로딩/추론/처리 오류는 정지 후 상태 초기화한다. 정상 미검출은 위 알고리즘별 정책을 따른다. Basic_P의 `None` 대체 처리는 주석 상태다.
+- **디버그:** YOLO는 입력 header를 보존하지만 basic은 현재 시각/빈 frame_id를 사용한다. basic 디버그는 기존처럼 검출·조향 예외 처리 밖에 있다. JPEG 인코딩은 동기 처리다. 창 표시와 키 입력 처리는 없으며 화면 표시는 별도 디버그 노드에서 담당할 예정이다. 해당 노드는 아직 구현하지 않았다.
+- **raw 입력:** 저장만 하며 세 토픽의 시간 동기화는 없다. 새 알고리즘에서 처리 시작 콜백과 입력 준비 조건을 연결해야 한다.
+- **기존 주석:** basic 일부 주석은 미검출 None, Sobel 해상도 오류 문구는 basic_sat을 언급한다. 실제 동작과 이 문서를 기준으로 읽는다.
