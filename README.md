@@ -29,7 +29,7 @@ driving/
 └── setup.py
 ```
 
-`__init__.py`와 문서 등은 생략했다. 알고리즘 연결은 노드의 명시적 분기로 작성한다. 계산 객체를 재사용하며, YOLO 모델은 해당 조합의 첫 영상 처리 때 한 번 로드한다. basic만 사용하면 Ultralytics를 import하거나 모델을 로드하지 않는다.
+`__init__.py`와 문서 등은 생략했다. 알고리즘 연결은 노드의 명시적 분기로 작성한다. 계산 객체를 재사용하며, 기본 YOLO 모델은 첫 영상 처리 때 한 번 로드한다. 첫 영상 전에 basic 조합으로 선택을 바꾸면 Ultralytics를 import하거나 모델을 로드하지 않는다.
 
 ```mermaid
 flowchart TD
@@ -51,7 +51,7 @@ YOLO 타이머는 저장된 메시지를 꺼내고 저장 자리를 비운다. �
 
 ## 알고리즘별 입력과 결과
 
-기본 선택은 `basic_sat` + `basic_p`다.
+기본 선택은 `yolo_lane` 검출 + `pure_pursuit` 조향이다. 노드를 시작하면 별도 선택 명령 없이 `/camera` 입력으로 YOLO 주행 계산을 시작한다.
 
 | 검출 | 조향 | 전달하는 결과 |
 | --- | --- | --- |
@@ -87,14 +87,15 @@ Sat은 회색 밝기에 `clip(29.12 * 밝기 + beta, 0, 255)`를 적용하며 HS
 - 양쪽 차선은 중앙 경로를, 한쪽 차선은 원본 법선 offset 경로를 계산한다. 비정상 차선 폭에서 이전 목표점과 가까운 차선을 선택하는 원본 규칙도 유지한다.
 - 목표점은 `LanePath.target()`으로 구해 `PurePursuit.compute_to()`에 전달한다. 범용 `compute(path)`는 목표점 선택 방식이 달라 사용하지 않는다.
 - 정상 차선 추종의 최대 속도 기본값은 0.18m/s, 한쪽 검출은 계산 속도의 0.8배다.
+- `/intersection_state`가 `true`이면 최대 속도 기준을 `pure_pursuit.v_max_intersection`(기본 0.12m/s)으로 바꾸고 곡률에 원본 배율 0.7을 적용한다. 이후 곡률 감속·한쪽 차선 배율·각속도 제한·평활화 순서는 원본과 같다. 최종 속도를 항상 0.12로 고정하거나 최종 각속도에 단순히 0.7을 곱하는 방식이 아니다.
 - **정상 영상의 차선 미검출은 원본처럼 0.05m/s 직진, 각속도 0이다.** 정지 정책과 다르다.
 - 디버그는 BEV 위에 마스크, 차선 곡선, 중앙 경로, 목표점, ROI와 속도를 표시한다. 원본 `draw()`를 사용하며 JPEG header는 입력 header를 보존한다.
 
-`/lane_state`, `/intersection_state`, 교차로 감속 설정은 포함하지 않는다. 유효한 YOLO 조합 선택이 실행 조건이다. 원본의 일반 차선 모드(`intersection=False`)를 비교 기준으로 삼는다. 기본 BEV 변환점, 카메라 높이, 차축 위치와 차선 폭의 실물 적합성은 대상 카메라에서 확인해야 한다.
+`/lane_state`는 포함하지 않는다. 유효한 YOLO 조합 선택이 실행 조건이며, `/intersection_state`는 YOLO 조향의 교차로 정책만 바꾼다. 기본 상태는 `false`이고 마지막으로 수신한 값을 다음 상태 메시지까지 유지한다. 알고리즘을 바꿔도 이 값은 유지하며 Sat/Sobel + Basic_P 계산에는 적용하지 않는다. 교차로 상태 변경 자체는 차선 추적·조향 평활화를 초기화하지 않고 다음 YOLO 처리에 반영된다. 미검출은 교차로에서도 `v_lost` 직진 정책을 따른다. 기본 BEV 변환점, 카메라 높이, 차축 위치와 차선 폭의 실물 적합성은 대상 카메라에서 확인해야 한다.
 
 ## 빌드와 실행
 
-ROS 의존성은 [package.xml](package.xml), 선택적 YOLO Python 의존성은 [requirements-yolo.txt](requirements-yolo.txt)에 있다. 모델은 빌드 시 `share/driving/models`에 설치된다.
+ROS 의존성은 [package.xml](package.xml), YOLO Python 의존성은 [requirements-yolo.txt](requirements-yolo.txt)에 있다. 기본 YOLO 주행에는 PyTorch/Ultralytics가 설치된 실행 환경이 필요하다. 모델은 빌드 시 `share/driving/models`에 설치된다.
 
 다음은 Galactic 기준 명령이다. 현재 Humble 개발 VM에서는 ROS setup 경로를 `/opt/ros/humble/setup.bash`로 바꾼다.
 
@@ -105,8 +106,6 @@ cd "$DRIVING_WS"
 rosdep install --from-paths src/driving --ignore-src -r -y
 PYTHONNOUSERSITE=1 /usr/bin/colcon build --symlink-install --packages-select driving
 source install/setup.bash
-# basic 실행: 디버그 영상은 /debug1 토픽으로 발행한다.
-ros2 run driving driving --ros-args -r cmd_vel:=cmd_vel_preview
 ```
 
 빌드는 기본 ROS 환경에서 시스템 colcon을 사용한다. 위 `PYTHONNOUSERSITE=1`은 사용자 영역 setuptools가 시스템 빌드 도구와 섞이는 기존 충돌을 피하기 위한 실행 설정이며 패키지를 삭제하지 않는다.
@@ -121,7 +120,7 @@ source "$DRIVING_WS/install/setup.bash"
   -r cmd_vel:=cmd_vel_preview -p yolo_lane.device:=cpu
 ```
 
-위 프로세스는 처음에 basic 조합으로 시작한다. 아래 선택 명령으로 YOLO를 활성화한다. 카메라 발행기나 bag 변환기는 별도로 실행해야 하며, 이 패키지는 입력 영상을 만들지 않는다. `/camera_raw_16_9`만 재생하면 `/camera`를 사용하는 계산은 시작되지 않는다.
+위 프로세스는 YOLO + Pure Pursuit 조합으로 시작한다. 선택 토픽을 보내지 않아도 첫 `/camera` 입력부터 처리하고 `/debug1`에 JPEG를 발행한다. 카메라 발행기나 bag 변환기는 별도로 실행해야 하며, 이 패키지는 입력 영상을 만들지 않는다. `/camera_raw_16_9`만 재생하면 `/camera`를 사용하는 계산은 시작되지 않는다. basic만 사용할 때는 아래의 검출·조향 선택 명령을 모두 적용한다. YOLO 의존성이 없는 환경에서는 카메라 발행 전에 basic 조합을 선택한다.
 
 Jetson Orin Nano / JetPack 5에서는 해당 JetPack·Python에 맞는 NVIDIA PyTorch/torchvision을 별도로 준비한다. VM의 venv·wheel을 그대로 복사하지 않으며, 의존성 설치가 해당 torch를 일반 CPU 패키지로 교체하지 않게 관리한다. 실제 CUDA 추론은 대상 장치에서 검증해야 한다.
 
@@ -167,17 +166,21 @@ ros2 run driving driving_debug --ros-args -r debug1:=/another_debug/compressed
 | `/camera_raw`, `/camera_raw_16_9` | 구독 / `sensor_msgs/msg/CompressedImage` | 마지막 메시지 저장만 수행 |
 | `/driving/detection` | 구독 / `std_msgs/msg/String` | `basic_sat`, `basic_sobel`, `yolo_lane` |
 | `/driving/steering` | 구독 / `std_msgs/msg/String` | `basic_p`, `pure_pursuit` |
+| `/intersection_state` | 구독 / `std_msgs/msg/Bool` | YOLO 교차로 모드: `true` 진입, `false` 해제 |
 | `/cmd_vel` | 발행 / `geometry_msgs/msg/Twist` | 선속도와 각속도 |
 | `/debug1` | 발행 / `sensor_msgs/msg/CompressedImage` | 선택한 알고리즘의 JPEG |
 | `/debug2` | 발행자 생성 / `sensor_msgs/msg/CompressedImage` | 현재 발행 없음 |
 
-영상 구독은 `qos_profile_sensor_data`, 선택 구독과 발행은 depth 10 기본 QoS다. 이름에 raw가 있어도 현재 메시지 타입은 `CompressedImage`다.
+영상 구독은 `qos_profile_sensor_data`, 선택·교차로 상태 구독과 발행은 depth 10 기본 QoS다. 이름에 raw가 있어도 현재 메시지 타입은 `CompressedImage`다.
 
 ```bash
-# YOLO 조합 선택. 두 명령 사이의 미지원 조합에서는 정지한다.
+# 다른 조합에서 기본 YOLO 조합으로 복귀. 시작 시에는 이 명령이 필요 없다.
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: yolo_lane}"
 ros2 topic pub --once /driving/steering std_msgs/msg/String "{data: pure_pursuit}"
-# basic으로 복귀
+# YOLO 교차로 모드 진입 / 해제 (각각 필요한 시점에 실행)
+ros2 topic pub --once /intersection_state std_msgs/msg/Bool "{data: true}"
+ros2 topic pub --once /intersection_state std_msgs/msg/Bool "{data: false}"
+# basic 조합으로 전환. 두 명령 사이의 미지원 조합에서는 정지한다.
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sat}"
 ros2 topic pub --once /driving/steering std_msgs/msg/String "{data: basic_p}"
 # basic_p와 함께 Sobel 사용
@@ -205,6 +208,7 @@ ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sobel
 | `yolo_lane.single_offset` | `0.5` | YOLO 프레임마다 / 단일 차선으로부터 차선 폭의 몇 배 떨어질지 |
 | `yolo_lane.lane_width` | `355.0` | YOLO 프레임마다 / BEV 차선 폭 px, 양수 |
 | `pure_pursuit.v_max` | `0.18` | YOLO 프레임마다 / 최대 속도 m/s |
+| `pure_pursuit.v_max_intersection` | `0.12` | YOLO 프레임마다 / 교차로 모드의 최대 속도 기준 m/s, 유한한 0 이상 값 |
 | `pure_pursuit.v_lost` | `0.05` | YOLO 프레임마다 / 미검출 직진 속도 m/s |
 | `pure_pursuit.k_lat` | `1.0` | YOLO 프레임마다 / 곡률 이득 |
 | `pure_pursuit.max_ang` | `1.2` | YOLO 프레임마다 / 평활화 전 각속도 제한 rad/s |
@@ -215,10 +219,13 @@ ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sobel
 ```bash
 ros2 param set /driving yolo_lane.conf 0.5
 ros2 param set /driving pure_pursuit.v_max 0.12
+ros2 param set /driving pure_pursuit.v_max_intersection 0.10
 ros2 param set /driving basic.lane_mode false
 ```
 
 기하 파라미터를 바꾸면 다음 YOLO 프레임에서 `LanePath`를 다시 생성해 차선 추적을 초기화한다. 조향 계산은 프레임마다 값을 받아 기존 평활화 상태를 이어간다. 선택 전환·미검출·처리 오류에서는 조향 상태도 초기화한다.
+
+교차로 곡률 배율 `ang_scale_intersection = 0.7`은 원본처럼 내부 설정이며 `LanePurePursuit`에 둔다. ROS 파라미터는 최대 속도 `pure_pursuit.v_max_intersection`만 복원했다. 이 값은 교차로에서 일반 `v_max`를 대체하므로 `v_max`를 낮춰 시험할 때 교차로 속도도 별도로 조절한다.
 
 시작 전용 파라미터는 실행 중 변경을 거부한다. 재시작 시 `--ros-args -p yolo_lane.process_hz:=10.0`처럼 지정한다. YOLO/PurePursuit의 나머지 숫자 범위 검사는 처리 시점에 수행하므로 `ros2 param set` 성공이 계산 가능한 값을 보장하지는 않는다. 잘못된 값은 처리 오류로 정지하고 로그를 남긴다. 변경값은 재시작 시 유지되지 않는다.
 
@@ -230,10 +237,12 @@ Basic_P의 `normal_angular_divisor` 등은 기존 소스 상수다. 이번 이�
 
 - 패키지 단독 colcon 빌드, 모델 share 설치, Python 3.8 문법 검사.
 - 원본 BEV/LanePath/PurePursuit 계산 정의 8개의 AST 동일성. 독립 12사례와 연속 12사례에서 원본 일반 차선 계산과 속도·평활화 결과 일치(허용 오차 1e-12), 디버그 픽셀 일치.
+- 교차로 복원 후 합성 마스크 32사례에서 원본 일반·교차로 속도/조향 계산과 일치(허용 오차 1e-12), 24사례의 디버그 픽셀 일치. 실제 DDS의 Bool 상태 전환·파라미터 서비스 변경·연속 7사례 계산·미검출·한쪽 차선·basic 복귀·잘못된 속도 설정 시 정지를 확인했다. 이 검사는 모델 추론을 합성 마스크로 대체했으며 Galactic·실차 검증은 아니다.
 - 실제 DDS에서 선택 전환·미지원 조합 정지·재선택 초기화·모델 재사용·파라미터 반영·JPEG/header·입력 및 추론 오류·기존 basic 좌우 미검출 동작 확인. 추론을 빠른 대체 함수로 바꾼 타이머 검사는 약 15Hz였다.
 - GUI 제거 후 화면 환경 변수 없이 Sat/Sobel의 320×120 JPEG와 YOLO의 640×480 JPEG 수신을 확인했다. 이 확인에서 YOLO 표시본은 준비한 검출 상태로 생성했으며 모델 추론은 재실행하지 않았다. YOLO 입력 header와 기존 발행 활성화 설정도 유지된다.
 - `driving_debug` 추가 후 실제 DDS에서 다섯 영상 토픽의 수신·JPEG 디코딩·개별 갱신·손상 입력 처리·namespace/remap을 확인했다. HighGUI 호출을 대체해 창 생성과 q/Esc 종료, Ctrl+C 및 정상 종료의 창 정리를 검사했다. 현재 실행 환경에는 디스플레이 연결이 없어 실제 창 표시는 미검증이다. 노드 import에 PyTorch/Ultralytics가 필요하지 않음도 확인했다.
 - `normal` bag의 원본 영상을 camera_ros 방식으로 보정한 5개 표본에서 실제 CPU YOLO 추론과 ROS 발행 확인. 첫 표본은 원본 추론 함수와 마스크가 같았고, 5개 모두 같은 검출 결과에 대한 원본 속도 명령과 일치했다.
+- 기본 선택을 YOLO/Pure Pursuit로 변경한 뒤 선택 메시지 없이 첫 영상부터 처리됨을 확인했다. 위 bag 표본 5장에 대해 원본과 현재 모델을 각각 로드해 추론하고 일반·교차로 상태를 전환했다. 모든 표본의 BEV·마스크·클래스·신뢰도가 동일했고, 목표점·속도·조향·디버그 결과도 일치했다. 동일 설정·상태의 계산 비교이며 입력 오류 처리나 실시간 파라미터 적용 시점까지 원본과 동일하다는 의미는 아니다.
 - 최초 측정에서 모델 초기화 포함 약 0.63초, 이후 전체 프레임 처리 약 89~96ms였다. 이 VM에서 실제 15fps 달성 결과가 아니며 처리 여력은 대략 10~11fps 수준이다. 실행 부하에 따라 달라진다.
 
 실제 Galactic/Python 3.8 런타임, Jetson GPU, 실차, 전체 bag 정확도·완주는 검증하지 않았다. 원본과 계산이 같다는 사실이 현재 카메라에 맞는 보정이나 주행 성능을 보장하지 않는다.

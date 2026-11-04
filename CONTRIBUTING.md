@@ -111,7 +111,7 @@ class Basic_Threshold:
 from driving.detection.basic_threshold import Basic_Threshold
 ```
 
-기존 `Detection` 선언을 다음처럼 바꾼다. 기본 선택값 `self.lane_detection_algorithm = 'basic_sat'`는 유지한다.
+기존 `Detection` 선언을 다음처럼 바꾼다. 기본 선택값 `self.lane_detection_algorithm = 'yolo_lane'`, `self.steering_algorithm = 'pure_pursuit'`는 유지하고 새 알고리즘은 선택 토픽으로 전환한다.
 
 ```python
 Detection = Literal['basic_sobel', 'basic_sat', 'yolo_lane', 'basic_threshold']
@@ -155,7 +155,7 @@ if self.lane_detection_algorithm == 'basic_threshold':
 
 **좌우 모드 전달:** 기존 Sat/Sobel과 마찬가지로 새 분기에서도 `makeTwist(center, lane_mode)`로 모드를 전달한다. `Basic_P`는 전달받은 인자로 설정을 선택하며 객체에 좌우 모드를 저장하지 않는다. 두 번째 인자를 생략하면 기본값 `True`가 사용되므로 오른쪽 모드에서도 왼쪽 기준으로 계산된다. 각 분기에서 현재 모드를 빠짐없이 전달한다.
 
-검출 결과의 타입이나 의미가 다르면 해당 조향 호출을 바꾼다. 기본 `Basic_P`는 현재 `None`을 처리하지 않으므로 `None`을 그대로 전달하지 않는다. 새 조합의 미검출 정책을 해당 알고리즘과 연결부에서 정한다.
+검출 결과의 타입이나 의미가 다르면 해당 조향 호출을 바꾼다. 기존 `Basic_P`는 현재 `None`을 처리하지 않으므로 `None`을 그대로 전달하지 않는다. 새 조합의 미검출 정책을 해당 알고리즘과 연결부에서 정한다.
 
 ### 2-5. 디버그 영상을 연결한다
 
@@ -182,12 +182,13 @@ README의 빌드·실행 절차를 따른 뒤, ROS 환경을 읽은 다른 터�
 
 ```bash
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_threshold}"
+ros2 topic pub --once /driving/steering std_msgs/msg/String "{data: basic_p}"
 ros2 param set /driving basic_threshold.threshold 190
 ros2 param get /driving basic_threshold.threshold
 ros2 topic pub --once /driving/detection std_msgs/msg/String "{data: basic_sat}"
 ```
 
-노드가 새 분기에 들어가고 새 검출기가 만든 중심으로 조향하는지 확인한다. 선택 로그만 보고 연결 완료라고 판단하지 않는다. 같은 `detection` Python 패키지 안에 파일을 추가하면 현재 `setup.py`의 `find_packages`가 포함하므로 실행 엔트리 포인트를 더 만들 필요는 없다. 외부 라이브러리를 새로 쓰는 경우에는 의존성과 Galactic 설치 가능 여부도 확인한다.
+시작 시 조향은 `pure_pursuit`이므로 위 basic 예제에서는 검출과 조향을 모두 바꿔야 한다. 두 명령 사이에는 미지원 조합으로 정지한다. 노드가 새 분기에 들어가고 새 검출기가 만든 중심으로 조향하는지 확인한다. 선택 로그만 보고 연결 완료라고 판단하지 않는다. 같은 `detection` Python 패키지 안에 파일을 추가하면 현재 `setup.py`의 `find_packages`가 포함하므로 실행 엔트리 포인트를 더 만들 필요는 없다. 외부 라이브러리를 새로 쓰는 경우에는 의존성과 Galactic 설치 가능 여부도 확인한다.
 
 ## 3. 기존 파라미터 전달 방식을 따른다
 
@@ -237,13 +238,13 @@ elif self.steering_algorithm == 'my_controller':
 
 1. `detection/yolo_lane.py`: `detectLane(msg, ...)`에서 디코딩, BEV, 원본 `detect()` 추론과 `LanePath.update/target`을 호출한다. `(target, mode)`를 반환하고 `debug(pursuit)`로 원본 표시본을 만든다.
 2. `detection/lane_estimator.py`: 원본의 기하 계산과 `LanePath`를 보관한다. ROS 구독·파라미터 조회를 넣지 않는다.
-3. `steering/pure_pursuit.py`: 원본 PurePursuit 계산을 보관한다. `LanePurePursuit.makeTwist(target, mode, ...)`가 일반 차선 속도 정책과 `compute_to()`를 연결한다.
+3. `steering/pure_pursuit.py`: 원본 PurePursuit 계산을 보관한다. `LanePurePursuit.makeTwist(target, mode, ...)`가 일반·교차로 속도 정책과 `compute_to()`를 연결한다. 노드에서 전달한 `intersection`이 참이면 `v_max_intersection`과 내부 곡률 배율 0.7을 적용한다. 미검출과 한쪽 차선 정책은 원본대로 유지한다.
 4. 노드: `YoloLane`은 첫 유효 YOLO 프레임에서 생성하고 모델을 재사용한다. `LanePurePursuit`는 시작 때 생성한다. `camera_callback`은 YOLO 조합이면 최신 메시지만 저장하고 반환하며, `process_yolo` 타이머에서 계산·발행한다.
 5. 파라미터: 원본 값들은 노드에서 `yolo_lane.*`, `pure_pursuit.*`로 선언하고 함수 인자로 전달한다. 원본의 창 표시 옵션은 제거하고 디버그 토픽 발행만 유지했다. 모델 경로·장치·처리 주기는 시작 전용이며 나머지는 처리할 때 읽는다. 기하 설정 변경 시 검출 추적을 초기화한다.
 6. 선택 전환: `selection_changed`가 0 Twist를 발행하고 `reset_yolo`로 대기 영상·차선 추적·조향 평활화를 비운다. 새로운 상태 보유 알고리즘은 그 알고리즘의 reset도 이 위치에 연결한다. 매 프레임 초기화하면 추적과 평활화가 사라지므로 전환과 프레임 처리를 구분한다.
 7. 자산: 모델을 `models/`에 두고 `setup.py`의 data_files로 share 경로에 설치했다. Python 외 의존성은 package.xml, 선택적 추론 의존성은 requirements-yolo.txt와 README의 환경 안내에 기록했다. 참조 저장소가 없어도 빌드한 패키지만으로 기본 모델을 찾을 수 있다.
 
-`target`은 basic의 픽셀 중심과 달리 차축 기준 전방 x/좌측 y 미터 좌표다. `None`은 정상 차선 미검출이며 기본 0.05m/s 직진으로 처리한다. `mode`는 both/yellow_only/white_only/lost이고 외부 enable `/lane_state`와는 별개다. 외부 enable·교차로 기능은 현재 제외했다. 원본 목표점을 `compute_to`에 전달하는 순서와 정상 미검출·한쪽 차선 정책을 보존해야 한다.
+`target`은 basic의 픽셀 중심과 달리 차축 기준 전방 x/좌측 y 미터 좌표다. `None`은 정상 차선 미검출이며 기본 0.05m/s 직진으로 처리한다. `mode`는 both/yellow_only/white_only/lost이고 외부 enable `/lane_state`와는 별개다. `/lane_state`는 현재 제외했다. `/intersection_state` Bool은 노드가 구독해 `is_intersection`에 저장하고 YOLO 조향에만 전달한다. 초기값은 False이고 알고리즘 선택 변경에도 마지막 수신값을 유지한다. 교차로 상태 변경 자체는 추적·평활화를 초기화하지 않는다. `pure_pursuit.v_max_intersection`은 노드가 선언·조회하는 실시간 파라미터다. 새 조향기에 교차로 정책이 필요하면 해당 호출부에 상태와 설정을 명시적으로 전달한다. 원본 목표점을 `compute_to`에 전달하는 순서와 정상 미검출·한쪽 차선 정책을 보존해야 한다.
 
 15Hz는 YOLO에만 적용한다. 타이머는 새 메시지가 없으면 건너뛰고, 선택 전환 시 저장한 메시지를 버린다. 단일 executor이므로 느린 추론을 비동기로 바꾸는 기능은 아니다. 다른 알고리즘도 타이머가 필요하면 해당 입력·소비 시점을 명시적으로 연결하고 영상 콜백과 타이머에서 중복 계산하지 않는다.
 
@@ -271,6 +272,7 @@ elif self.steering_algorithm == 'my_controller':
 | 정상 영상 / 차선 미검출 | 약속한 중심·오차 또는 미검출 정책대로 동작하는가 |
 | 빈 데이터 / 손상 영상 / 다른 해상도 | 입력 오류 경로로 처리되고 기본 노드 연결에서는 0 Twist가 발행되는가 |
 | 파라미터 변경 | 다음에 처리하는 해당 알고리즘의 프레임에 실제 계산 변화가 있는가 |
+| YOLO 교차로 진입·해제 | 원본의 속도 기준·곡률 배율·평활화가 반영되고, 미검출·한쪽 차선·basic 복귀가 정책대로 동작하는가 |
 | 좌우 모드 | 검출 ROI와 조향 목표가 같은 모드인가 |
 | 디버그 영상 | 현재 처리 프레임의 표시본이며 JPEG로 디코딩할 수 있는가 |
 | 입력 이름·타입·QoS | 발행기와 구독기가 실제로 연결되는가 |

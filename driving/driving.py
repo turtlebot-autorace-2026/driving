@@ -12,7 +12,7 @@ from rcl_interfaces.msg import ParameterDescriptor
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 from driving.detection.basic_sat import Basic_Sat
 from driving.detection.basic_sobel import Basic_Sobel
@@ -34,8 +34,9 @@ class DrivingNode(Node):
         self.camera_raw_msg: Optional[CompressedImage] = None
         self.camera_raw_16_9_msg: Optional[CompressedImage] = None
 
-        self.lane_detection_algorithm: Detection = 'basic_sat'
-        self.steering_algorithm: Steering = 'basic_p'
+        self.lane_detection_algorithm: Detection = 'yolo_lane'
+        self.steering_algorithm: Steering = 'pure_pursuit'
+        self.is_intersection = False
 
         # 계산 객체를 재사용한다. 무거운 YOLO 모델은 첫 처리 때 한 번 읽는다.
 
@@ -89,6 +90,13 @@ class DrivingNode(Node):
             self.lane_detection_selection_callback,
             10,
         )
+        # 교차로 상태는 노드가 보관하고 YOLO 조향 계산에 전달한다.
+        self.intersection_state_subscription = self.create_subscription(
+            Bool,
+            'intersection_state',
+            self.intersection_state_callback,
+            10,
+        )
 
         ## 파라미터
         self.declare_parameter('basic_sat.beta', -5080.1)   # for basic_sat
@@ -113,6 +121,7 @@ class DrivingNode(Node):
         self.declare_parameter('yolo_lane.single_offset', 0.5)
         self.declare_parameter('yolo_lane.lane_width', 355.0)
         self.declare_parameter('pure_pursuit.v_max', 0.18)
+        self.declare_parameter('pure_pursuit.v_max_intersection', 0.12)
         self.declare_parameter('pure_pursuit.v_lost', 0.05)
         self.declare_parameter('pure_pursuit.k_lat', 1.0)
         self.declare_parameter('pure_pursuit.max_ang', 1.2)
@@ -208,6 +217,8 @@ class DrivingNode(Node):
                 v_lost=p('pure_pursuit.v_lost'), k_lat=p('pure_pursuit.k_lat'),
                 max_ang=p('pure_pursuit.max_ang'), k_v=p('pure_pursuit.k_v'),
                 ang_smooth=p('pure_pursuit.ang_smooth'), v_single=p('pure_pursuit.v_single'),
+                intersection=self.is_intersection,
+                v_max_intersection=p('pure_pursuit.v_max_intersection'),
             )
             self.cmd_vel_pub.publish(twist)
             self.publish_debug_yolo(msg)
@@ -219,6 +230,14 @@ class DrivingNode(Node):
             self.reset_yolo()
         finally:
             self.last_yolo_processing_seconds = time.perf_counter() - started
+
+    def intersection_state_callback(self, msg: Bool):
+        if self.is_intersection == msg.data:
+            return
+        self.is_intersection = msg.data
+        # 원본처럼 모드 전환만으로 차선 추적이나 조향 평활화를 초기화하지 않는다.
+        state = 'Start' if self.is_intersection else 'Finish'
+        self.get_logger().info(state + ' Intersection Mode')
 
     # 선택은 이름을 바꾼 뒤, 다음 새 영상부터 해당 분기를 실행한다.
     def steering_selection_callback(self, msg: String):

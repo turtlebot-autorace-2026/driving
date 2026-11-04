@@ -13,4 +13,6 @@
 `driving/detection/lane_estimator.py`와 `driving/steering/pure_pursuit.py`의
 기하 및 조향 계산도 위 커밋을 기준으로 이식했다. 검출기의 `detect()`는 원본
 `detection.py`의 추론 계산을 유지한다. 검출/조향 호출을 분리했으며 외부 차선
-enable 토픽과 교차로 제어는 포함하지 않는다.
+enable 토픽(`/lane_state`)은 포함하지 않는다. 교차로 상태(`/intersection_state`)와
+최대 속도·곡률 배율 정책은 원본대로 연결한다. 최대 속도 파라미터 이름은
+`pure_pursuit.v_max_intersection`이며 기본 0.12m/s, 내부 곡률 배율은 0.7이다.
