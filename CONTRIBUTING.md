@@ -174,7 +174,7 @@ def publish_debug_basic_threshold(self):
 
 현재 Sat/Sobel과 같은 `/debug1`을 사용하면 구독자는 선택한 검출기의 영상을 계속 볼 수 있다. 알고리즘 하나를 추가할 때마다 새 토픽이 필요한 것은 아니다. 여러 처리 단계의 영상을 동시에 보고 싶을 때 별도 발행을 연결한다. `/debug2`는 현재 선언만 돼 있으므로 사용하려면 실제 발행 코드를 넣어야 한다.
 
-모든 검출기는 디버그 표시본을 만들고 노드는 토픽으로만 발행한다. 새 알고리즘에도 GUI 창이나 키 입력 코드를 넣지 않는다. 화면 표시는 별도 디버그 노드에서 처리할 예정이며 아직 구현하지 않았다. 공통 발행 함수는 전달한 stamp와 선택적 frame_id를 사용한다. basic 예제는 출력 시각을 사용한다. YOLO처럼 입력과 대응시키려면 `publish_compressed(self.debug_pub1, image, msg.header.stamp, msg.header.frame_id)`로 호출한다.
+모든 검출기는 디버그 표시본을 만들고 노드는 토픽으로만 발행한다. 새 알고리즘에도 GUI 창이나 키 입력 코드를 넣지 않는다. 화면 표시는 `driving_debug` 노드가 담당한다. 현재 camera/camera_raw/camera_raw_16_9/debug1/debug2를 모두 구독하므로 기존 debug1을 쓰면 뷰어 수정이 필요 없다. 새 영상 토픽을 만들면 `driving/driving_debug.py`의 `IMAGE_TOPICS`와 README도 갱신한다. 공통 발행 함수는 전달한 stamp와 선택적 frame_id를 사용한다. basic 예제는 출력 시각을 사용한다. YOLO처럼 입력과 대응시키려면 `publish_compressed(self.debug_pub1, image, msg.header.stamp, msg.header.frame_id)`로 호출한다.
 
 ### 2-6. 빌드하고 선택해 본다
 

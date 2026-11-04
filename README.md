@@ -14,6 +14,7 @@
 driving/
 ├── driving/
 │   ├── driving.py                # ROS 통신, 파라미터, 선택 분기, 15Hz 타이머
+│   ├── driving_debug.py          # 카메라/디버그 영상 5개 토픽의 imshow 뷰어
 │   ├── detection/
 │   │   ├── basic_sat.py          # 밝기 변환 → 한쪽 ROI 중심
 │   │   ├── basic_sobel.py        # Sobel 경계 → 한쪽 ROI 중심
@@ -42,7 +43,7 @@ flowchart TD
     steer --> output
 ```
 
-주행 노드는 디버그 영상을 생성해 `/debug1`에 JPEG로 발행한다. 로컬 창을 띄우지 않으므로 화면 환경 없이 실행할 수 있다.
+주행 노드는 디버그 영상을 생성해 `/debug1`에 JPEG로 발행한다. 로컬 창을 띄우지 않으므로 화면 환경 없이 실행할 수 있다. 화면 표시는 별도 `driving_debug` 노드가 담당한다.
 
 YOLO 타이머는 저장된 메시지를 꺼내고 저장 자리를 비운다. 새 입력이 없으면 같은 영상을 다시 계산하거나 속도를 반복 발행하지 않는다. Sat/Sobel은 영상 콜백에서 기존대로 처리한다.
 
@@ -126,6 +127,36 @@ Jetson Orin Nano / JetPack 5에서는 해당 JetPack·Python에 맞는 NVIDIA Py
 
 `cmd_vel_preview`는 검증용 출력이다. 실제 로봇에 연결할 때만 remap을 제거한다. 통신할 터미널끼리 ROS setup, workspace setup, `ROS_DOMAIN_ID` 등을 맞춘다.
 
+## 영상 디버그 노드
+
+GUI를 사용할 수 있는 로컬 데스크톱 터미널에서 별도로 실행한다. 빌드 후 ROS와 workspace setup을 읽는다.
+
+```bash
+ros2 run driving driving_debug
+```
+
+뷰어는 다음 다섯 토픽을 모두 `sensor_msgs/msg/CompressedImage`와 `qos_profile_sensor_data`로 구독한다. 토픽 이름은 상대 이름이므로 namespace와 ROS remap을 사용할 수 있다.
+
+| 창 제목 / 기본 토픽 | 영상 |
+| --- | --- |
+| `camera` / `/camera` | 보정된 입력 영상 |
+| `camera_raw` / `/camera_raw` | 보정 전 중앙 crop 영상 |
+| `camera_raw_16_9` / `/camera_raw_16_9` | 원본 wide 영상 |
+| `debug1` / `/debug1` | 선택한 검출기의 디버그 영상 |
+| `debug2` / `/debug2` | 추가 디버그 영상; 현재 주행 노드는 발행하지 않음 |
+
+각 토픽에서 정상 영상을 처음 받으면 크기 조절 가능한 창을 만들고, 이후 수신 영상으로 갱신한다. 발행되지 않는 토픽에는 창이 생기지 않는다. 빈 메시지·손상 영상은 경고 후 건너뛰며 마지막 정상 화면을 유지한다. 입력 중단 표시나 다섯 영상의 시간 동기화는 구현하지 않았다.
+
+영상 창에 포커스를 둔 상태에서 `q` 또는 `Esc`, 실행 터미널에서 `Ctrl+C`로 뷰어를 종료한다. 종료 시 뷰어의 창을 정리한다. 창의 닫기 버튼만 누르면 다음 수신 때 다시 열릴 수 있으므로 위 종료 방법을 사용한다. 뷰어는 주행 명령이나 알고리즘 선택을 발행하지 않으며, 뷰어를 종료해도 별도 주행 노드는 계속 실행된다.
+
+OpenCV HighGUI를 지원하는 설치와 유효한 디스플레이 세션이 필요하다. 화면 환경 변수가 없는 터미널에서는 안내와 함께 종료한다. 뷰어에는 PyTorch나 Ultralytics가 필요 없으며, 주행 노드·카메라 발행기·bag 재생은 별도로 실행한다. 추가 영상 토픽은 `driving/driving_debug.py`의 `IMAGE_TOPICS`에 명시적으로 추가한다. 현재 목록 밖 토픽의 자동 탐색이나 비압축 `Image` 변환은 하지 않는다.
+
+다른 이름으로 발행되는 영상을 기존 창에 연결하려면 remap한다. 창 제목은 목록의 이름을 유지한다.
+
+```bash
+ros2 run driving driving_debug --ros-args -r debug1:=/another_debug/compressed
+```
+
 ## 토픽과 선택
 
 소스는 상대 이름을 사용한다. 아래는 namespace/remap이 없을 때의 이름이다.
@@ -201,6 +232,7 @@ Basic_P의 `normal_angular_divisor` 등은 기존 소스 상수다. 이번 이�
 - 원본 BEV/LanePath/PurePursuit 계산 정의 8개의 AST 동일성. 독립 12사례와 연속 12사례에서 원본 일반 차선 계산과 속도·평활화 결과 일치(허용 오차 1e-12), 디버그 픽셀 일치.
 - 실제 DDS에서 선택 전환·미지원 조합 정지·재선택 초기화·모델 재사용·파라미터 반영·JPEG/header·입력 및 추론 오류·기존 basic 좌우 미검출 동작 확인. 추론을 빠른 대체 함수로 바꾼 타이머 검사는 약 15Hz였다.
 - GUI 제거 후 화면 환경 변수 없이 Sat/Sobel의 320×120 JPEG와 YOLO의 640×480 JPEG 수신을 확인했다. 이 확인에서 YOLO 표시본은 준비한 검출 상태로 생성했으며 모델 추론은 재실행하지 않았다. YOLO 입력 header와 기존 발행 활성화 설정도 유지된다.
+- `driving_debug` 추가 후 실제 DDS에서 다섯 영상 토픽의 수신·JPEG 디코딩·개별 갱신·손상 입력 처리·namespace/remap을 확인했다. HighGUI 호출을 대체해 창 생성과 q/Esc 종료, Ctrl+C 및 정상 종료의 창 정리를 검사했다. 현재 실행 환경에는 디스플레이 연결이 없어 실제 창 표시는 미검증이다. 노드 import에 PyTorch/Ultralytics가 필요하지 않음도 확인했다.
 - `normal` bag의 원본 영상을 camera_ros 방식으로 보정한 5개 표본에서 실제 CPU YOLO 추론과 ROS 발행 확인. 첫 표본은 원본 추론 함수와 마스크가 같았고, 5개 모두 같은 검출 결과에 대한 원본 속도 명령과 일치했다.
 - 최초 측정에서 모델 초기화 포함 약 0.63초, 이후 전체 프레임 처리 약 89~96ms였다. 이 VM에서 실제 15fps 달성 결과가 아니며 처리 여력은 대략 10~11fps 수준이다. 실행 부하에 따라 달라진다.
 
@@ -209,6 +241,6 @@ Basic_P의 `normal_angular_divisor` 등은 기존 소스 상수다. 이번 이�
 - **입력 중단:** 새 메시지가 없으면 처리를 건너뛴다. 입력 timeout 정지는 아직 없으므로 마지막 속도 명령에 대한 구동부 동작을 별도로 확인해야 한다.
 - **종료:** ROS가 살아 있는 정상 종료 경로에서 0 Twist 발행을 시도한다. 강제 종료·통신 종료 상황의 전달 보장은 없다.
 - **입력 오류와 미검출:** YOLO 로딩/추론/처리 오류는 정지 후 상태 초기화한다. 정상 미검출은 위 알고리즘별 정책을 따른다. Basic_P의 `None` 대체 처리는 주석 상태다.
-- **디버그:** YOLO는 입력 header를 보존하지만 basic은 현재 시각/빈 frame_id를 사용한다. basic 디버그는 기존처럼 검출·조향 예외 처리 밖에 있다. JPEG 인코딩은 동기 처리다. 창 표시와 키 입력 처리는 없으며 화면 표시는 별도 디버그 노드에서 담당할 예정이다. 해당 노드는 아직 구현하지 않았다.
+- **디버그:** YOLO는 입력 header를 보존하지만 basic은 현재 시각/빈 frame_id를 사용한다. basic 디버그는 기존처럼 검출·조향 예외 처리 밖에 있다. JPEG 인코딩은 동기 처리다. 주행 노드에는 창 표시와 키 입력 처리가 없으며 별도 `driving_debug` 노드가 담당한다. 뷰어의 입력이 끊기면 마지막 정상 화면이 남는다.
 - **raw 입력:** 저장만 하며 세 토픽의 시간 동기화는 없다. 새 알고리즘에서 처리 시작 콜백과 입력 준비 조건을 연결해야 한다.
 - **기존 주석:** basic 일부 주석은 미검출 None, Sobel 해상도 오류 문구는 basic_sat을 언급한다. 실제 동작과 이 문서를 기준으로 읽는다.

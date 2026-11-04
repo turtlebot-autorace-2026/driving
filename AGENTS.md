@@ -9,6 +9,7 @@
 | 위치 | 책임 |
 | --- | --- |
 | `driving/driving.py` | ROS 통신, 선택 이름, 객체 생성, 파라미터 조회, 명시적인 호출 분기, 발행 |
+| `driving/driving_debug.py` | 영상 5개 토픽 구독, JPEG 디코딩, OpenCV 창 표시 |
 | `driving/detection/` | 알고리즘별 디코딩·전처리·ROI·검출·미검출 정책·디버그 표시본 |
 | `driving/steering/` | 검출 결과를 해석하여 `Twist` 계산 |
 
@@ -23,7 +24,7 @@
 - YOLO만 최신 수신 메시지 + 기본 15Hz 타이머로 처리한다. 같은 메시지 재처리와 카메라 콜백의 중복 추론을 피한다. 타이머는 단일 executor 안에서 동기 실행되므로 실제 15fps나 비차단 수신을 보장하지 않는다.
 - 모델은 첫 사용에 한 번 로드하고 재사용한다. 선택 변경은 정지 발행 후 대기 영상·추적·조향 평활화를 초기화한다. 새 조향기를 추가할 때 camera_callback과 selection_changed의 지원 조합 조건도 갱신한다.
 - 원본 설정은 노드의 ROS 파라미터로 유지한다. 모델 경로·장치·주기는 시작 전용 read_only이고 나머지 튜닝값은 프레임마다 읽는다. 창 표시 설정은 제거했다. 유효 범위 검사와 실제 적용 시점을 문서에 적는다.
-- 주행 노드와 알고리즘은 디버그 영상 생성·JPEG 토픽 발행만 담당한다. GUI 창·키 입력 코드는 넣지 않는다. 화면 표시는 별도 디버그 노드의 역할이며 해당 노드는 아직 구현하지 않았다.
+- 주행 노드와 알고리즘은 디버그 영상 생성·JPEG 토픽 발행만 담당한다. GUI 창·키 입력 코드는 별도 `driving_debug` 노드에만 둔다. 뷰어는 `IMAGE_TOPICS`의 camera/camera_raw/camera_raw_16_9/debug1/debug2를 구독하며 속도·알고리즘 선택을 발행하지 않는다. 새 영상 토픽이 생기면 목록과 문서를 함께 갱신한다.
 - YOLO 디버그는 원본 draw와 입력 header를 보존한다. 모델 출처·해시는 models/README.md, 설치 경로는 setup.py의 share data_files를 확인한다. 기본 알고리즘 실행에 Ultralytics import를 강제하지 않는다.
 
 ## 수정 원칙
