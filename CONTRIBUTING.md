@@ -132,7 +132,7 @@ self.declare_parameter('basic_threshold.threshold', 180)
 
 ### 2-4. 카메라 콜백에 실행 분기를 추가한다
 
-아래 코드는 `camera_callback` 안의 기존 두 분기 다음에 넣는 예제다. 함수 앞의 `lane_enabled` 검사 뒤에 두어 주행 정지 시 이 분기도 실행되지 않게 한다. `msg`, `cv2`, `Twist`는 기존 함수 인자와 import를 사용한다.
+아래 코드는 `camera_callback` 안의 기존 두 분기 다음에 넣는 예제다. 대기 중에도 검출·조향 계산과 디버그 발행을 유지하고, 정상 속도와 오류 시의 0 속도 발행에 각각 `lane_enabled` 조건을 둔다. `msg`, `cv2`, `Twist`는 기존 함수 인자와 import를 사용한다.
 
 ```python
 if self.lane_detection_algorithm == 'basic_threshold':
@@ -146,10 +146,12 @@ if self.lane_detection_algorithm == 'basic_threshold':
         twist = self.basic_p.makeTwist(center, lane_mode)
     except (ValueError, cv2.error) as error:
         self.get_logger().warning(f'Camera processing failed: {error}')
-        self.cmd_vel_pub.publish(Twist())
+        if self.lane_enabled:
+            self.cmd_vel_pub.publish(Twist())
         return
 
-    self.cmd_vel_pub.publish(twist)
+    if self.lane_enabled:
+        self.cmd_vel_pub.publish(twist)
     self.publish_debug_basic_threshold()
 ```
 
@@ -240,9 +242,9 @@ twist = self.my_controller.makeTwist(center, lane_mode=lane_mode)
 6. 선택 전환: `selection_changed`가 0 Twist를 발행하고 `reset_yolo`로 대기 영상·차선 추적·조향 평활화를 비운다. 새로운 상태 보유 알고리즘은 선택 변경과 `lane_state_callback`의 정지 처리에서 그 알고리즘의 reset도 연결한다. 매 프레임 초기화하면 추적과 평활화가 사라지므로 전환과 프레임 처리를 구분한다.
 7. 자산: 모델을 `models/`에 두고 `setup.py`의 data_files로 share 경로에 설치했다. Python 외 의존성은 package.xml, 선택적 추론 의존성은 requirements-yolo.txt와 README의 환경 안내에 기록했다. 참조 저장소가 없어도 빌드한 패키지만으로 기본 모델을 찾을 수 있다.
 
-`target`은 basic의 픽셀 중심과 달리 차축 기준 전방 x/좌측 y 미터 좌표다. `None`은 정상 차선 미검출이며 기본 0.05m/s 직진으로 처리한다. `mode`는 both/yellow_only/white_only/lost이고 외부 enable `/lane_state`와는 별개다. `/lane_state`는 초기 False이며 True를 받아야 차선 계산을 시작한다. 정지 신호는 대기 영상·추적·평활화를 초기화하지만 검출 선택과 교차로 상태는 유지한다. `/intersection_state` Bool은 노드가 구독해 `is_intersection`에 저장하고 YOLO 조향에만 전달한다. 초기값은 False이고 알고리즘 선택 변경에도 마지막 수신값을 유지한다. 교차로 상태 변경 자체는 추적·평활화를 초기화하지 않는다. `pure_pursuit.v_max_intersection`은 노드가 선언·조회하는 실시간 파라미터다. 새 조향기에 교차로 정책이 필요하면 해당 호출부에 상태와 설정을 명시적으로 전달한다. 원본 목표점을 `compute_to`에 전달하는 순서와 정상 미검출·한쪽 차선 정책을 보존해야 한다.
+`target`은 basic의 픽셀 중심과 달리 차축 기준 전방 x/좌측 y 미터 좌표다. `None`은 정상 차선 미검출이며 기본 0.05m/s 직진으로 처리한다. `mode`는 both/yellow_only/white_only/lost이고 외부 enable `/lane_state`와는 별개다. `/lane_state`는 초기 False이며 검출·조향 계산과 디버그 발행은 대기 중에도 수행한다. 정상·오류 속도 발행에만 허용 상태를 적용한다. 정지 신호는 미처리 영상·추적·평활화를 초기화하지만 검출 선택과 교차로 상태는 유지한다. 이후 대기 중에도 추적·평활화는 새 영상으로 갱신된다. False→True에서는 미처리 영상만 비우고 추적·평활화는 유지하며, 재개 후 수신한 영상으로 속도를 발행한다. `/intersection_state` Bool은 노드가 구독해 `is_intersection`에 저장하고 YOLO 조향에만 전달한다. 초기값은 False이고 알고리즘 선택 변경에도 마지막 수신값을 유지한다. 교차로 상태 변경 자체는 추적·평활화를 초기화하지 않는다. `pure_pursuit.v_max_intersection`은 노드가 선언·조회하는 실시간 파라미터다. 새 조향기에 교차로 정책이 필요하면 해당 호출부에 상태와 설정을 명시적으로 전달한다. 원본 목표점을 `compute_to`에 전달하는 순서와 정상 미검출·한쪽 차선 정책을 보존해야 한다.
 
-15Hz는 YOLO에만 적용한다. 타이머는 새 메시지가 없으면 건너뛰고, 선택 전환 시 저장한 메시지를 버린다. 단일 executor이므로 느린 추론을 비동기로 바꾸는 기능은 아니다. 타이머에도 `lane_enabled` 검사가 필요하다. 다른 알고리즘도 타이머가 필요하면 해당 입력·소비 시점을 명시적으로 연결하고 영상 콜백과 타이머에서 중복 계산하지 않는다.
+15Hz는 YOLO에만 적용한다. 타이머는 새 메시지가 없으면 건너뛰고, 선택 전환 시 저장한 메시지를 버린다. 단일 executor이므로 느린 추론을 비동기로 바꾸는 기능은 아니다. 타이머는 대기 중에도 처리하며 `lane_enabled`는 정상·오류 속도 발행에 적용한다. 새 타이머 기반 알고리즘도 False→True 전환 때 미처리 영상을 비워 재개 이전 영상으로 속도를 발행하지 않도록 한다. 반복 True에서는 영상을 버리지 않는다. 영상 콜백과 타이머에서 중복 계산하지 않는다.
 
 원본 계산을 나눌 때는 같은 마스크 **순서**에 대한 목표점·속도·평활화 상태를 비교한다. 독립 영상만 비교하면 이전 프레임을 사용하는 추적 차이를 놓칠 수 있다. 실제 추론 시간은 디버그 생성까지 포함해 측정하고, 타이머 검사에서 대체한 추론을 실제 모델 성능으로 보고하지 않는다.
 
@@ -251,7 +253,7 @@ twist = self.my_controller.makeTwist(center, lane_mode=lane_mode)
 현재 `camera_raw_callback`과 `camera_raw_16_9_callback`은 마지막 메시지만 저장한다. 새 알고리즘에서 이 값을 사용하려면 어떤 영상이 계산을 시작하는지 정해야 한다.
 
 - `/camera` 수신을 계기로 저장된 raw 영상을 함께 쓸 경우, raw 메시지가 아직 `None`인 경우를 처리한다. 저장된 영상이 같은 시각에 촬영됐다고 가정하지 않는다.
-- raw 토픽 수신을 계기로 계산한다면 해당 콜백에도 `lane_enabled` 검사를 넣고 선택된 알고리즘의 처리 경로를 연결한다. `/camera` 콜백에서도 같은 알고리즘을 다시 실행해 속도를 중복 발행하지 않도록 한다.
+- raw 토픽 수신을 계기로 계산한다면 해당 콜백의 정상·오류 속도 발행에 `lane_enabled` 검사를 넣고, 대기 중 검출·디버그 처리는 유지한다. `/camera` 콜백에서도 같은 알고리즘을 다시 실행해 속도를 중복 발행하지 않도록 한다.
 - 새 검출기에서 해상도·디코딩·전처리를 처리한다. 기존 basic의 640×480 조건을 없애 다른 알고리즘까지 한꺼번에 맞추는 방식으로 변경하지 않는다.
 
 현재 세 입력을 동기화하는 기능은 없다. 여러 영상의 정확한 시간 대응이 필요한 알고리즘은 그 요구와 구현 범위를 따로 설명한다.
@@ -262,7 +264,7 @@ twist = self.my_controller.makeTwist(center, lane_mode=lane_mode)
 
 | 확인할 상황 | 확인할 결과 |
 | --- | --- |
-| 주행 시작·정지·재개 | 처음에는 계산하지 않고, False 수신 시 정지·대기 영상 폐기 후 True와 새 영상으로 재개하는가 |
+| 주행 시작·정지·재개 | 대기 중 검출·디버그는 계속되고 정상·오류 속도 발행은 없는가? False 수신 시 0 속도·상태 초기화, False→True 시 미처리 영상 폐기 후 새 영상으로 주행하는가? 반복 True는 영상·추적을 유지하는가? |
 | 기존 기본 조합 | 변경 전과 같은 입력에서 계산 결과가 유지되는가 |
 | 새 알고리즘 선택 | 해당 분기가 실제로 실행되고 그 결과로 속도를 계산하는가 |
 | 기존 알고리즘으로 복귀 | 이전 모드나 오래된 디버그 영상이 잘못 사용되지 않는가 |
@@ -320,7 +322,7 @@ PR 설명에는 다음 내용을 넣는다.
 
 미션은 사용자가 지정한 외부 저장소의 패키지를 사용한다. `driving`에 미션 노드나 실행 엔트리를 추가하거나 `/driving/detection` 목록에 미션 이름을 넣지 않는다. 외부 미션의 실행 예제와 입력 조건은 README의 외부 미션 연결 절을 참고한다.
 
-- 주행 허용은 `/lane_state` Bool로 연결한다. False 수신은 정지와 대기 영상·추적 초기화, True 수신은 이후 새 영상부터 주행을 의미한다.
+- 주행 허용은 `/lane_state` Bool로 연결한다. False 수신은 정지와 미처리 영상·추적 초기화, False→True 전환은 미처리 영상 폐기 후 새 수신 영상부터 주행을 의미한다. 대기 중에도 검출·조향 계산·디버그 발행은 계속되며 처리 오류로 0 속도를 발행하지 않는다.
 - 현재 `/lane_mode`는 구독하지 않는다. `/intersection_state`는 YOLO의 속도·곡률 정책이며 미션 전체의 방향 전환을 구현하는 신호가 아니다. 미연결 토픽의 동작을 가정하지 않는다.
 - 원본 신호등은 시작할 때 lane False를 보내지 않으므로 먼저 정지 상태를 설정한다. 외부 미션의 시작/취소와 주행 허용은 실제 코드에 맞춰 구분한다.
 - 직접 속도를 발행하는 외부 미션을 연결할 때는 차선 주행과의 제어권 전환을 확인한다. 모든 미션의 속도 경쟁이 자동 해결된다고 가정하지 않는다.

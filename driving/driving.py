@@ -34,7 +34,7 @@ class DrivingNode(Node):
         self.camera_raw_16_9_msg: Optional[CompressedImage] = None
 
         self.lane_detection_algorithm: Detection = 'yolo_lane'
-        self.lane_enabled = False  # /lane_state=True를 받을 때까지 주행을 기다린다.
+        self.lane_enabled = False  # 검출은 계속하고 /lane_state=True부터 주행 속도를 발행한다.
         self.is_intersection = False
 
         # 계산 객체를 재사용한다. 무거운 YOLO 모델은 첫 처리 때 한 번 읽는다.
@@ -139,9 +139,7 @@ class DrivingNode(Node):
 
     def camera_callback(self, msg: CompressedImage):
         self.camera_msg = msg
-        # 대기 중에는 basic 계산도 YOLO 처리용 영상 저장도 하지 않는다.
-        if not self.lane_enabled:
-            return
+        # 대기 중에도 검출·조향 계산과 디버그 발행을 계속한다. 속도 발행만 제한한다.
 
         # YOLO는 수신과 처리를 분리한다. 타이머가 소비하기 전에는 최신 수신본으로 덮어쓴다.
         if self.lane_detection_algorithm == 'yolo_lane':
@@ -159,10 +157,12 @@ class DrivingNode(Node):
             except (ValueError, cv2.error) as error:
                 # 손상되거나 규격이 맞지 않는 영상은 차선 미검출과 구분한다.
                 self.get_logger().warning(f'Camera processing failed: {error}')
-                self.cmd_vel_pub.publish(Twist())
+                if self.lane_enabled:
+                    self.cmd_vel_pub.publish(Twist())
                 return
 
-            self.cmd_vel_pub.publish(twist)
+            if self.lane_enabled:
+                self.cmd_vel_pub.publish(twist)
             self.publish_debug_basic_sat()
 
         if self.lane_detection_algorithm == 'basic_sobel':
@@ -172,9 +172,11 @@ class DrivingNode(Node):
                 twist = self.basic_p.makeTwist(center, lane_mode)
             except (ValueError, cv2.error) as error:
                 self.get_logger().warning(f'Camera processing failed: {error}')
-                self.cmd_vel_pub.publish(Twist())
+                if self.lane_enabled:
+                    self.cmd_vel_pub.publish(Twist())
                 return
-            self.cmd_vel_pub.publish(twist)
+            if self.lane_enabled:
+                self.cmd_vel_pub.publish(twist)
             self.publish_debug_basic_sobel()
 
     def camera_raw_callback(self, msg: CompressedImage):
@@ -185,7 +187,7 @@ class DrivingNode(Node):
 
     def process_yolo(self):
         """기본 15Hz. 새 영상 한 장을 검출 → 조향 → 발행하고 같은 영상을 재처리하지 않는다."""
-        if not self.lane_enabled or self.lane_detection_algorithm != 'yolo_lane':
+        if self.lane_detection_algorithm != 'yolo_lane':
             return
         msg, self.yolo_msg = self.yolo_msg, None
         if msg is None:
@@ -213,18 +215,21 @@ class DrivingNode(Node):
                 intersection=self.is_intersection,
                 v_max_intersection=p('pure_pursuit.v_max_intersection'),
             )
-            self.cmd_vel_pub.publish(twist)
+            if self.lane_enabled:
+                self.cmd_vel_pub.publish(twist)
             self.publish_debug_yolo(msg)
         except Exception as error:
-            # 모델 로딩/추론 실패도 노드를 종료시키지 않고 정지 처리한다.
+            # 모델 로딩/추론 실패도 노드를 종료시키지 않는다. 주행 중이면 정지한다.
             # 정상 미검출(None → v_lost 직진)과는 별개의 경로다.
             self.get_logger().error(f'YOLO processing failed: {error}')
-            self.cmd_vel_pub.publish(Twist())
+            if self.lane_enabled:
+                self.cmd_vel_pub.publish(Twist())
             self.reset_yolo()
         finally:
             self.last_yolo_processing_seconds = time.perf_counter() - started
 
     def lane_state_callback(self, msg: Bool):
+        was_enabled = self.lane_enabled
         self.lane_enabled = msg.data
         if not self.lane_enabled:
             # 정지 신호마다 0 속도를 보낸다. 재개할 때 이전 영상을 쓰지 않도록 비운다.
@@ -232,7 +237,10 @@ class DrivingNode(Node):
             self.reset_yolo()
             self.get_logger().info('Lane driving stopped.')
         else:
-            # 저장된 camera_msg를 처리하지 않고 이후 카메라 콜백의 영상을 기다린다.
+            if not was_enabled:
+                # 대기 중 받은 미처리 영상은 버리고 재개 이후 수신한 영상부터 주행한다.
+                # 추적·평활화는 유지한다. 반복 True에서는 처리 대기 영상도 유지한다.
+                self.yolo_msg = None
             self.get_logger().info('Lane driving enabled.')
 
     def intersection_state_callback(self, msg: Bool):
