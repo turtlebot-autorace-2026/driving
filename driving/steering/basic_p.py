@@ -11,7 +11,6 @@ class Config:
     error_scale: float
     normal_angular_divisor: float
     intersection_angular_divisor: float
-    debug_window: str
     debug_color: tuple  # (0, 0, 255): red
 
 
@@ -24,7 +23,6 @@ class Basic_P:
             error_scale=60.0,
             normal_angular_divisor=1.7,
             intersection_angular_divisor=2.5,
-            debug_window='left_lane',
             debug_color=(0, 0, 255),
         )
     RIGHT_LANE_CONFIG = Config(
@@ -34,7 +32,6 @@ class Basic_P:
             error_scale=77.0,
             normal_angular_divisor=1.3,
             intersection_angular_divisor=3.2,
-            debug_window='right_lane',
             debug_color=(255, 0, 0),
         )
 

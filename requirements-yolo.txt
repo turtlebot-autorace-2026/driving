@@ -1,0 +1,3 @@
+# 기본 YOLO 주행용 의존성. 실행용 venv에 준비하고 colcon 기본 Python과 분리한다.
+# Jetson은 JetPack에 맞는 torch/torchvision을 먼저 설치하고 교체되지 않게 관리한다.
+ultralytics==8.4.192
