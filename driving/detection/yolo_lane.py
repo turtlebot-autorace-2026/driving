@@ -42,9 +42,13 @@ class YoloLane:
     def detectLane(
         self, msg, conf=0.4, imgsz=640, camera_height=0.129,
         roi_top_row=220, roi_half_width=250, lookahead_row=400,
-        single_offset=0.5, lane_width=355.0,
+        single_offset=0.5, lane_width=355.0, roi_side=None, roi_height_scale=1.0,
     ) -> Tuple[Optional[Tuple[float, float]], str]:
-        """target=(전방 x, 좌측 y)[m] 또는 None, mode=both/단일 차선/lost."""
+        """target=(전방 x, 좌측 y)[m] 또는 None, mode=both/단일 차선/lost.
+
+        roi_side: None=기본 ROI, 'left'/'right'=로봇 중앙선부터 해당 방향 영상 끝까지(회전 표지판).
+        roi_height_scale: 회전 표지판 ROI의 높이 배율(위쪽으로 늘림).
+        """
         self.bev = None
         self.detections = []
         geometry = (camera_height, roi_top_row, roi_half_width,
@@ -74,7 +78,7 @@ class YoloLane:
         self.conf, self.imgsz = conf, imgsz
         self.bev = to_bev(src)
         self.detections = self.detect(self.bev)
-        path = self.lane.update(self.detections)
+        path = self.lane.update(self.detections, roi_side, roi_height_scale)
         target = None if path is None else self.lane.target(path)
         return target, self.lane.mode
 

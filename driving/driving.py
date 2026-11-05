@@ -7,7 +7,7 @@ import rclpy
 from rclpy.node import Node
 import cv2
 import numpy as np
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
 from rcl_interfaces.msg import ParameterDescriptor
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
@@ -36,6 +36,10 @@ class DrivingNode(Node):
         self.lane_detection_algorithm: Detection = 'yolo_lane'
         self.lane_enabled = False  # 검출은 계속하고 /lane_state=True부터 주행 속도를 발행한다.
         self.is_intersection = False
+        # 회전 표지판(/left, /right): True가 되면 ROI를 중앙선부터 해당 방향 영상 끝까지로 바꾸고,
+        # sign.roi_hold_sec 뒤 기본 ROI로 복구한다.
+        self.roi_side: Optional[str] = None   # None | 'left' | 'right'
+        self.roi_side_since = 0.0             # ROS 시간 [s]
 
         # 계산 객체를 재사용한다. 무거운 YOLO 모델은 첫 처리 때 한 번 읽는다.
 
@@ -97,6 +101,12 @@ class DrivingNode(Node):
             10,
         )
 
+        # 표지판 검출(mission_model)은 latched(transient local)로 발행하므로 같은 QoS로 받는다.
+        sign_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.left_sign_subscription = self.create_subscription(
+            Bool, 'left', self.left_sign_callback, sign_qos)
+        self.right_sign_subscription = self.create_subscription(
+            Bool, 'right', self.right_sign_callback, sign_qos)
         ## 파라미터
         self.declare_parameter('basic_sat.beta', -5080.1)   # for basic_sat
         self.declare_parameter('basic.lane_mode', True)   # for basic_sat, basic_sobel & basic_p
@@ -128,10 +138,16 @@ class DrivingNode(Node):
         self.declare_parameter('pure_pursuit.ang_smooth', 0.6)
         self.declare_parameter('pure_pursuit.v_single', 0.8)
 
+        # 회전 표지판을 본 뒤 방향 ROI를 유지하는 시간 [s]
+        self.declare_parameter('sign.roi_hold_sec', 30.0)
+        # 회전 표지판 ROI의 높이 배율: 기본 ROI 높이(480 - roi_top_row)를 위쪽으로 늘린다.
+        self.declare_parameter('sign.roi_height_scale', 1.4)
+
         hz = self.get_parameter('yolo_lane.process_hz').value
         if not math.isfinite(hz) or hz <= 0:
             raise ValueError('yolo_lane.process_hz must be finite and positive.')
         self.yolo_timer = self.create_timer(1.0 / hz, self.process_yolo)
+        self.sign_timer = self.create_timer(0.1, self.check_sign_roi_timeout)
 
 
 
@@ -206,6 +222,8 @@ class DrivingNode(Node):
                 lookahead_row=p('yolo_lane.lookahead_row'),
                 single_offset=p('yolo_lane.single_offset'),
                 lane_width=p('yolo_lane.lane_width'),
+                roi_side=self.roi_side,
+                roi_height_scale=p('sign.roi_height_scale'),
             )
             twist = self.pure_pursuit.makeTwist(
                 target, mode, v_max=p('pure_pursuit.v_max'),
@@ -250,6 +268,32 @@ class DrivingNode(Node):
         # 원본처럼 모드 전환만으로 차선 추적이나 조향 평활화를 초기화하지 않는다.
         state = 'Start' if self.is_intersection else 'Finish'
         self.get_logger().info(state + ' Intersection Mode')
+
+    def left_sign_callback(self, msg: Bool):
+        if msg.data:
+            self.start_sign_roi('left')
+
+    def right_sign_callback(self, msg: Bool):
+        if msg.data:
+            self.start_sign_roi('right')
+
+    def now_seconds(self) -> float:
+        """노드의 ROS 시계(use_sim_time=false면 시스템 ROS 시간) [s]."""
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def start_sign_roi(self, side: str):
+        """표지판이 True가 된 시점부터 방향 ROI를 사용한다. 다시 True가 되면 그 시점부터 다시 센다."""
+        self.roi_side = side
+        self.roi_side_since = self.now_seconds()
+        hold = self.get_parameter('sign.roi_hold_sec').value
+        self.get_logger().info(f'Turn sign {side}: lane ROI from center to the {side} edge for {hold:.0f} s')
+
+    def check_sign_roi_timeout(self):
+        if self.roi_side is None:
+            return
+        if self.now_seconds() - self.roi_side_since >= self.get_parameter('sign.roi_hold_sec').value:
+            self.roi_side = None
+            self.get_logger().info('Turn sign ROI expired: back to the normal lane ROI')
 
     # 선택은 이름을 바꾼 뒤, 다음 새 영상부터 해당 분기를 실행한다.
     def lane_detection_selection_callback(self, msg: String):

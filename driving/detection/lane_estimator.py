@@ -87,6 +87,9 @@ class LanePath:
     def reset(self):
         self.yellow = self.white = self.center = None   # x(row) curves in BEV px
         self.mode = 'lost'            # both | yellow_only | white_only | lost
+        self.roi_side = None          # None | 'left' | 'right' (turn sign: half ROI)
+        self.roi_height_scale = 1.0   # turn sign: ROI height x this (extended upward)
+        self.rows = self.cfg.rows     # rows sampled in the last update (bottom -> top)
         self.prev_x_la = None         # lookahead point of the previous frame (lane continuity)
 
     # ---- BEV px <-> robot frame (x forward from the wheel axle, y left) [m] ----
@@ -108,20 +111,44 @@ class LanePath:
         order = np.argsort(path[:, 0])
         return x, float(np.interp(x, path[order, 0], path[order, 1]))
 
-    def roi_mask(self):
+    def roi_x_range(self):
+        '''ROI columns [x0, x1). roi_side 'left': image left edge ~ robot center line,
+        'right': robot center line ~ image right edge, None: robot_x +- roi_half_width.'''
         cfg = self.cfg
-        roi = np.zeros((BEV_H, BEV_W), bool)
+        if self.roi_side == 'left':
+            return 0, int(cfg.robot_x)
+        if self.roi_side == 'right':
+            return int(cfg.robot_x), BEV_W
         x0 = int(max(0, cfg.robot_x - cfg.roi_half_width))
         x1 = int(min(BEV_W, cfg.robot_x + cfg.roi_half_width))
-        roi[int(cfg.roi_top_row):, x0:x1] = True
+        return x0, x1
+
+    def roi_top(self):
+        '''ROI top row. With a turn sign the ROI height is scaled by roi_height_scale, extended upward.'''
+        top = self.cfg.roi_top_row
+        if self.roi_side is not None:
+            top = BEV_H - (BEV_H - top) * self.roi_height_scale
+        return int(min(max(top, 0), BEV_H - 1))
+
+    def roi_mask(self):
+        roi = np.zeros((BEV_H, BEV_W), bool)
+        x0, x1 = self.roi_x_range()
+        roi[self.roi_top():, x0:x1] = True
         return roi
 
-    def update(self, detections):
+    def update(self, detections, roi_side=None, roi_height_scale=1.0):
         '''
         detections: list of (cls, mask HxW bool in BEV coords, conf)
+        roi_side: None (normal ROI), 'left' / 'right' (turn sign: center line to that image edge)
+        roi_height_scale: with a turn sign, ROI height x this (top row moves up)
         returns the path as an (N, 2) array of (x forward, y left) [m], or None when no lane is seen
         '''
-        cfg, rows = self.cfg, self.cfg.rows
+        cfg = self.cfg
+        self.roi_side = roi_side
+        self.roi_height_scale = roi_height_scale
+        # lane curves are sampled over the ROI rows, so a taller sign ROI also samples higher rows
+        rows = np.arange(BEV_H - 10, self.roi_top() - 1, -cfg.row_step) if roi_side else cfg.rows
+        self.rows = rows
 
         # 1. lane masks inside the ROI, one union mask per color
         roi = self.roi_mask()
@@ -164,7 +191,7 @@ class LanePath:
 
     def draw(self, bev, detections=None, pursuit=None):
         '''BEV debug view; pass the PurePursuit to show its target point and command.'''
-        cfg, rows = self.cfg, self.cfg.rows
+        cfg, rows = self.cfg, self.rows
         img = bev.copy()
         if detections:
             ov = img.copy()
@@ -178,9 +205,8 @@ class LanePath:
             tx, tr = self.to_bev(*pursuit.target)
             cv2.circle(img, (int(round(tx)), int(round(tr))), 7, (0, 0, 255), -1)
         cv2.line(img, (int(cfg.robot_x), BEV_H), (int(cfg.robot_x), BEV_H - 60), (255, 0, 0), 2)
-        x0 = int(max(0, cfg.robot_x - cfg.roi_half_width))
-        x1 = int(min(BEV_W - 1, cfg.robot_x + cfg.roi_half_width))
-        cv2.rectangle(img, (x0, int(cfg.roi_top_row)), (x1, BEV_H - 1), (0, 255, 255), 1)
-        txt = self.mode + (f' v={pursuit.v:.2f} w={pursuit.w:+.2f}' if pursuit is not None else '')
+        x0, x1 = self.roi_x_range()
+        cv2.rectangle(img, (x0, self.roi_top()), (min(x1, BEV_W - 1), BEV_H - 1), (0, 255, 255), 1)
+        txt = self.mode + (f' [roi {self.roi_side}]' if self.roi_side else '') + (f' v={pursuit.v:.2f} w={pursuit.w:+.2f}' if pursuit is not None else '')
         cv2.putText(img, txt, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         return img
